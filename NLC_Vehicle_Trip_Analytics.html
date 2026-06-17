@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NLC Vehicle Trip Analytics — Fleet Audit Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+/* ============================================================
+   NLC FLEET TELEMETRY — DESIGN TOKENS
+   Concept: a "black box flight recorder" reading for ground
+   vehicles. Dark cockpit surface, brand green + gold accents,
+   monospace for every number so it reads like instrumentation.
+   ============================================================ */
+:root{
+  --bg:#0a0f0c;
+  --bg-grid: #0d1310;
+  --surface:#121810;
+  --surface-2:#182018;
+  --surface-3:#1e2920;
+  --line: #26342a;
+  --line-soft: #1c2620;
+  --green:#1A5C2E;
+  --green-bright:#3DA15E;
+  --green-glow: rgba(61,161,94,0.35);
+  --gold:#C9962A;
+  --gold-bright:#E3B655;
+  --text:#EAEFE9;
+  --text-dim:#9DAEA0;
+  --text-faint:#5E6E62;
+  --amber:#D9923F;
+  --amber-bright:#F0AE5C;
+  --red-soft:#C7595A;
+  --radius:10px;
+  --radius-lg:16px;
+  --font-display:'Space Grotesk', sans-serif;
+  --font-body:'Inter', sans-serif;
+  --font-mono:'JetBrains Mono', monospace;
+  --shadow-panel: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px -12px rgba(0,0,0,0.6);
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:
+    radial-gradient(circle at 15% -10%, rgba(61,161,94,0.10), transparent 40%),
+    radial-gradient(circle at 100% 0%, rgba(201,150,42,0.07), transparent 45%),
+    var(--bg);
+  color:var(--text);
+  font-family:var(--font-body);
+  font-size:14px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{ background: var(--green-glow); }
+a{color:var(--gold-bright);}
+.mono{font-family:var(--font-mono);}
+.hidden{display:none !important;}
+
+/* scrollbar */
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-track{background:var(--surface);}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;}
+::-webkit-scrollbar-thumb:hover{background:var(--green);}
+
+/* ===================== TOPBAR ===================== */
+.topbar{
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; gap:18px;
+  padding:12px 22px;
+  background:linear-gradient(180deg, rgba(10,15,12,0.97), rgba(10,15,12,0.92));
+  border-bottom:1px solid var(--line);
+  backdrop-filter:blur(8px);
+  flex-wrap:wrap;
+}
+.brand{display:flex; align-items:center; gap:11px; margin-right:6px;}
+.brand-badge{
+  width:38px;height:38px;border-radius:9px;
+  background:conic-gradient(from 220deg, var(--green), var(--green-bright), var(--gold));
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-display);font-weight:700;font-size:13px;color:#06140a;
+  box-shadow:0 0 0 1px rgba(255,255,255,0.08) inset, 0 4px 14px -4px var(--green-glow);
+  flex-shrink:0;
+}
+.brand-text{display:flex; flex-direction:column; line-height:1.15;}
+.brand-text strong{font-family:var(--font-display);font-size:15px;letter-spacing:0.2px;}
+.brand-text span{font-size:11px;color:var(--text-dim);}
+
+.vehicle-tabs{
+  display:flex; gap:6px; flex:1; overflow-x:auto;
+  padding:3px; background:var(--surface); border:1px solid var(--line-soft);
+  border-radius:11px;
+  scrollbar-width:thin;
+}
+.vtab{
+  display:flex; align-items:center; gap:8px;
+  padding:7px 13px; border-radius:8px; cursor:pointer;
+  white-space:nowrap; border:1px solid transparent;
+  font-size:12.5px; color:var(--text-dim); transition:.15s;
+  font-family:var(--font-mono);
+}
+.vtab:hover{background:var(--surface-2); color:var(--text);}
+.vtab.active{
+  background:var(--surface-3); color:var(--gold-bright); border-color:var(--line);
+  box-shadow:0 0 0 1px rgba(201,150,42,0.18) inset;
+}
+.vtab .dot{width:6px;height:6px;border-radius:50%;background:var(--green-bright); flex-shrink:0;}
+.vtab.flagged .dot{background:var(--amber-bright);}
+
+.topbar-actions{display:flex; gap:8px; align-items:center;}
+.btn{
+  font-family:var(--font-body); font-weight:600; font-size:12.5px;
+  padding:9px 14px; border-radius:9px; border:1px solid var(--line);
+  background:var(--surface-2); color:var(--text); cursor:pointer;
+  display:inline-flex; align-items:center; gap:7px; transition:.15s;
+  white-space:nowrap;
+}
+.btn:hover{border-color:var(--green-bright); color:var(--green-bright); background:var(--surface-3);}
+.btn-primary{background:linear-gradient(180deg, var(--green-bright), var(--green)); border-color:var(--green-bright); color:#06140a;}
+.btn-primary:hover{filter:brightness(1.1); color:#06140a;}
+.btn-gold{background:linear-gradient(180deg, var(--gold-bright), var(--gold)); border-color:var(--gold-bright); color:#1a1304;}
+.btn-gold:hover{filter:brightness(1.08); color:#1a1304;}
+.btn-ghost{background:transparent;}
+.btn svg{width:14px;height:14px;flex-shrink:0;}
+
+/* ===================== HERO TICKER ===================== */
+.hero-ticker{
+  display:grid; grid-template-columns:repeat(6,1fr); gap:1px;
+  background:var(--line-soft); border-bottom:1px solid var(--line);
+}
+.tick{
+  background:var(--bg-grid); padding:14px 18px;
+  display:flex; flex-direction:column; gap:4px;
+}
+.tick .tlabel{font-size:10.5px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-faint); font-weight:600;}
+.tick .tval{font-family:var(--font-mono); font-size:21px; font-weight:600; color:var(--text); display:flex; align-items:baseline; gap:5px;}
+.tick .tval .unit{font-size:11px; color:var(--text-dim); font-weight:500;}
+.tick .tsub{font-size:10.5px; color:var(--text-faint);}
+.tick.accent-gold .tval{color:var(--gold-bright);}
+.tick.accent-green .tval{color:var(--green-bright);}
+.tick.accent-amber .tval{color:var(--amber-bright);}
+
+/* ===================== LAYOUT ===================== */
+.layout{display:grid; grid-template-columns:440px 1fr; gap:16px; padding:16px 20px;}
+@media (max-width:980px){ .layout{grid-template-columns:1fr;} }
+
+.panel{
+  background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-panel); overflow:hidden;
+}
+.panel-head{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:13px 16px; border-bottom:1px solid var(--line-soft);
+}
+.panel-head h3{margin:0; font-family:var(--font-display); font-size:13.5px; font-weight:600; letter-spacing:0.2px; color:var(--text);}
+.panel-head .ph-note{font-size:11px; color:var(--text-faint);}
+.panel-body{padding:16px;}
+
+.map-col{display:flex; flex-direction:column; gap:14px;}
+#map{height:420px; width:100%; background:#0c1310;}
+.map-legend{display:flex; gap:14px; padding:11px 16px; border-top:1px solid var(--line-soft); flex-wrap:wrap;}
+.leg-item{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim);}
+.leg-swatch{width:11px;height:11px;border-radius:3px;}
+.map-fallback{padding:14px 16px; font-size:12px; color:var(--amber-bright); background:rgba(217,146,63,0.08); border-top:1px solid var(--line-soft); display:none;}
+
+.vehicle-card .row{display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed var(--line-soft); gap:10px;}
+.vehicle-card .row:last-child{border-bottom:none;}
+.vehicle-card .k{color:var(--text-dim); font-size:12px;}
+.vehicle-card .v{font-family:var(--font-mono); font-size:12.5px; text-align:right;}
+.driver-select{
+  font-family:var(--font-body); background:var(--surface-2); color:var(--text);
+  border:1px solid var(--line); border-radius:7px; padding:6px 9px; font-size:12.5px; cursor:pointer;
+}
+.station-badge{
+  display:inline-flex; align-items:center; gap:6px; font-size:11px; padding:4px 9px;
+  border-radius:20px; background:var(--surface-3); border:1px solid var(--line); color:var(--text-dim);
+}
+
+.content-col{display:flex; flex-direction:column; gap:16px;}
+.metric-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:12px;}
+@media (max-width:1300px){ .metric-grid{grid-template-columns:repeat(2,1fr);} }
+.mcard{
+  background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--radius);
+  padding:14px 15px; display:flex; flex-direction:column; gap:6px; position:relative;
+}
+.mcard .mlabel{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.06em; font-weight:600;}
+.mcard .mval{font-family:var(--font-mono); font-size:24px; font-weight:600;}
+.mcard .mfoot{font-size:11px; color:var(--text-dim);}
+.mcard.warn{border-color:rgba(217,146,63,0.4);}
+.mcard.warn .mval{color:var(--amber-bright);}
+.info-dot{
+  width:14px;height:14px;border-radius:50%;border:1px solid var(--text-faint); color:var(--text-faint);
+  font-size:9.5px; display:inline-flex; align-items:center; justify-content:center; cursor:default; flex-shrink:0;
+  position:relative;
+}
+.info-dot:hover .tip, .info-dot:focus .tip{opacity:1; transform:translateY(0); pointer-events:auto;}
+.tip{
+  position:absolute; bottom:130%; left:50%; transform:translateX(-50%) translateY(4px);
+  background:#06140a; color:var(--text); border:1px solid var(--green-bright); padding:8px 10px;
+  border-radius:7px; font-size:11.5px; line-height:1.4; width:210px; opacity:0; transition:.15s;
+  pointer-events:none; z-index:30; font-family:var(--font-body); font-weight:400; text-transform:none;
+  letter-spacing:0; box-shadow:0 8px 20px -6px rgba(0,0,0,0.6);
+}
+
+.chart-row{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+@media (max-width:760px){ .chart-row{grid-template-columns:1fr;} }
+.chart-box{padding:14px 16px 8px;}
+.chart-box canvas{max-height:230px;}
+
+.review-list{display:flex; flex-direction:column; gap:0;}
+.review-item{
+  display:grid; grid-template-columns:90px 1fr auto; gap:12px; align-items:center;
+  padding:11px 16px; border-bottom:1px solid var(--line-soft); font-size:12.5px;
+}
+.review-item:last-child{border-bottom:none;}
+.review-tag{
+  font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
+  padding:4px 8px; border-radius:6px; text-align:center; white-space:nowrap;
+}
+.review-tag.speed{background:rgba(201,150,42,0.14); color:var(--gold-bright); border:1px solid rgba(201,150,42,0.35);}
+.review-tag.halt{background:rgba(61,161,94,0.12); color:var(--green-bright); border:1px solid rgba(61,161,94,0.3);}
+.review-tag.gap{background:rgba(217,146,63,0.14); color:var(--amber-bright); border:1px solid rgba(217,146,63,0.35);}
+.review-tag.night{background:rgba(199,89,90,0.14); color:var(--red-soft); border:1px solid rgba(199,89,90,0.35);}
+.review-desc{color:var(--text);}
+.review-desc small{color:var(--text-faint); display:block; margin-top:2px;}
+.review-meta{font-family:var(--font-mono); color:var(--text-dim); font-size:12px; text-align:right;}
+.review-empty{padding:22px 16px; text-align:center; color:var(--text-faint); font-size:12.5px;}
+
+/* ===================== TABLES ===================== */
+.tables-wrap{padding:0 20px 16px; display:flex; flex-direction:column; gap:16px;}
+.table-toolbar{display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap;}
+.search-box{
+  flex:1; min-width:180px; background:var(--surface-2); border:1px solid var(--line); border-radius:8px;
+  padding:7px 11px; color:var(--text); font-size:12.5px; font-family:var(--font-body);
+}
+.search-box:focus{outline:none; border-color:var(--green-bright);}
+.table-scroll{overflow:auto; max-height:420px;}
+table.data-tbl{width:100%; border-collapse:collapse; font-size:12.5px;}
+table.data-tbl thead th{
+  position:sticky; top:0; background:var(--surface-2); text-align:left; padding:9px 14px;
+  font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-faint);
+  border-bottom:1px solid var(--line); cursor:pointer; white-space:nowrap; user-select:none;
+}
+table.data-tbl thead th:hover{color:var(--gold-bright);}
+table.data-tbl tbody td{padding:8px 14px; border-bottom:1px solid var(--line-soft); font-family:var(--font-mono); color:var(--text-dim); white-space:nowrap;}
+table.data-tbl tbody tr:hover td{background:var(--surface-2); color:var(--text);}
+.pill{padding:2px 8px; border-radius:20px; font-size:10.5px; font-family:var(--font-body); font-weight:600;}
+.pill.long{background:rgba(61,161,94,0.14); color:var(--green-bright);}
+.pill.fast{background:rgba(201,150,42,0.16); color:var(--gold-bright);}
+.table-pager{display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:10px 16px; font-size:12px; color:var(--text-dim);}
+.pager-btn{background:var(--surface-2); border:1px solid var(--line); color:var(--text); border-radius:6px; padding:4px 9px; cursor:pointer; font-size:12px;}
+.pager-btn:disabled{opacity:.35; cursor:not-allowed;}
+
+/* ===================== FLEET COMPARISON ===================== */
+.fleet-wrap{padding:0 20px 16px;}
+
+/* ===================== FOOTER ===================== */
+.app-footer{
+  display:flex; align-items:center; justify-content:space-between; gap:14px;
+  padding:16px 22px; border-top:1px solid var(--line-soft); color:var(--text-faint); font-size:11.5px; flex-wrap:wrap;
+}
+.app-footer .wm{font-family:var(--font-mono); color:var(--text-dim);}
+
+/* ===================== TOAST ===================== */
+#toast{
+  position:fixed; bottom:20px; right:20px; z-index:200; display:flex; flex-direction:column; gap:8px;
+}
+.toast-msg{
+  background:var(--surface-3); border:1px solid var(--green-bright); color:var(--text);
+  padding:11px 16px; border-radius:9px; font-size:12.5px; box-shadow:0 10px 30px -8px rgba(0,0,0,0.6);
+  animation:slideIn .2s ease;
+}
+.toast-msg.err{border-color:var(--red-soft);}
+@keyframes slideIn{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);}}
+
+/* ===================== EMPTY STATE ===================== */
+.empty-state{padding:60px 20px; text-align:center; color:var(--text-faint);}
+.empty-state h2{font-family:var(--font-display); color:var(--text-dim); font-size:18px;}
+
+/* ===================== PRINT ===================== */
+@media print{
+  body{background:#fff !important; color:#111 !important;}
+  .topbar, .table-toolbar, .table-pager, #toast, .driver-select, .btn, .map-fallback{display:none !important;}
+  .panel{border:1px solid #ccc !important; box-shadow:none !important; background:#fff !important;}
+  .mcard{border:1px solid #ccc !important; background:#fafafa !important;}
+  .mcard .mval, .tick .tval{color:#111 !important;}
+  .layout{grid-template-columns:1fr !important; padding:0 !important;}
+  table.data-tbl tbody td, table.data-tbl thead th{color:#111 !important;}
+  .hero-ticker{background:#eee !important;}
+  .tick{background:#fff !important;}
+  #map{height:300px !important;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-badge">NLC</div>
+      <div class="brand-text">
+        <strong>Vehicle Trip Analytics</strong>
+        <span>NLC Smart Solutions — Fleet Audit Dashboard</span>
+      </div>
+    </div>
+    <div class="vehicle-tabs" id="vehicleTabs"></div>
+    <div class="topbar-actions">
+      <button class="btn" id="btnImport" title="Add another vehicle's trip report">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+        Add Vehicle File
+      </button>
+      <button class="btn btn-gold" id="btnPrint" title="Download a clean PDF summary for printing or sharing">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/></svg>
+        Download Report
+      </button>
+    </div>
+  </header>
+
+  <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" multiple hidden>
+
+  <div id="mainContent"></div>
+
+  <footer class="app-footer">
+    <span>Generated by NLC Vehicle Trip Analytics — offline tool, runs from this single file. Map view needs internet for street tiles; everything else works offline.</span>
+    <span class="wm">Muhammad Noman Khalid | MTO NLC Smart Solutions</span>
+  </footer>
+</div>
+
+<div id="toast"></div>
+
+<!-- Print-only clean summary, built dynamically, placed after #app via JS -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+/* ================================================================
+   NLC VEHICLE TRIP ANALYTICS — APP ENGINE
+   Built for: Muhammad Noman Khalid | MTO NLC Smart Solutions
+   ================================================================ */
+(function(){
+"use strict";
+
+/* ---------- embedded starter data (raw sheet arrays, same shape
+   SheetJS sheet_to_json({header:1}) would produce) ---------- */
+var VEHICLE_RAW = {"LEG-5289":{"summary":[["🚚  VEHICLE TRIP REPORT",null],["NLC Smart Solutions — GPS Tracking System",null],[null,null],["VEHICLE INFORMATION",null],["Registration No.","LEG-5289"],["IMEI","352592577746282"],["Report Generated At","Jun 17, 2026 8:23:42 AM"],[null,null],["TRIP OVERVIEW",null],["Trip Start Time","Feb 17, 2026 7:51:44 AM"],["Trip End Time","Jun 17, 2026 8:19:42 AM"],["Total Duration","2880 hr 28 min"],["Total Distance (km)","2076.85 km"],["Start Location (Lat, Lon)","33.999947, 71.496613"],["End Location (Lat, Lon)","34.104038, 71.157948"],["Total GPS Points","50064"],["Moving Points","3006"],["Idle / Stop Count","166"],["Route via OSRM","No (raw GPS)"]],"idle":[["🛑  IDLE & STOP POINTS DETAIL",null,null,null,null,null,null],["Vehicle: LEG-5289   |   IMEI: 352592577746282   |   Total Stops: 166",null,null,null,null,null,null],[null,null,null,null,null,null,null],["Stop #","Latitude","Longitude","Stop Date","Arrived At","Departed At","Duration"],[1,"33.999947","71.496613","Feb 17, 2026","Feb 17, 2026 7:51:44 AM","Mar 10, 2026 3:09:05 PM","511 hr 17 min"],[2,"33.994598","71.506072","Mar 10, 2026","Mar 10, 2026 3:16:23 PM","Mar 11, 2026 7:31:32 AM","16 hr 15 min"],[3,"33.994603","71.506077","Mar 11, 2026","Mar 11, 2026 7:42:01 AM","Mar 11, 2026 8:47:01 AM","1 hr 5 min"],[4,"34.005420","71.483155","Mar 11, 2026","Mar 11, 2026 9:05:09 AM","Mar 11, 2026 10:40:48 AM","1 hr 36 min"],[5,"33.999630","71.496135","Mar 11, 2026","Mar 11, 2026 11:03:48 AM","Mar 11, 2026 4:56:33 PM","5 hr 53 min"],[6,"33.994655","71.506037","Mar 11, 2026","Mar 11, 2026 5:03:22 PM","Mar 12, 2026 7:30:14 AM","14 hr 27 min"],[7,"33.994740","71.505968","Mar 12, 2026","Mar 12, 2026 7:41:46 AM","Mar 12, 2026 7:43:08 AM","1 min"],[8,"33.994445","71.506043","Mar 12, 2026","Mar 12, 2026 8:23:19 AM","Mar 12, 2026 8:43:34 AM","20 min"],[9,"34.006155","71.482290","Mar 12, 2026","Mar 12, 2026 8:57:24 AM","Mar 12, 2026 10:13:05 AM","1 hr 16 min"],[10,"33.970005","71.479838","Mar 12, 2026","Mar 12, 2026 10:51:23 AM","Mar 12, 2026 11:40:28 AM","49 min"],[11,"33.994580","71.506020","Mar 15, 2026","Mar 15, 2026 2:01:25 PM","Mar 16, 2026 8:40:54 AM","18 hr 39 min"],[12,"33.994632","71.506000","Mar 16, 2026","Mar 16, 2026 10:49:05 AM","Mar 16, 2026 10:52:38 AM","4 min"],[13,"33.998968","71.496865","Mar 16, 2026","Mar 16, 2026 11:00:20 AM","Mar 16, 2026 11:07:49 AM","7 min"],[14,"33.994580","71.506097","Mar 16, 2026","Mar 16, 2026 11:15:20 AM","Mar 17, 2026 2:31:44 PM","27 hr 16 min"],[15,"34.004288","71.510650","Mar 17, 2026","Mar 17, 2026 3:00:59 PM","Mar 17, 2026 3:13:46 PM","13 min"],[16,"34.005492","71.506695","Mar 17, 2026","Mar 17, 2026 3:18:55 PM","Mar 17, 2026 3:28:54 PM","10 min"],[17,"34.000945","71.498317","Mar 17, 2026","Mar 17, 2026 3:34:31 PM","Mar 17, 2026 3:51:50 PM","17 min"],[18,"33.998772","71.493912","Mar 17, 2026","Mar 17, 2026 4:00:21 PM","Mar 17, 2026 4:09:51 PM","10 min"],[19,"33.994740","71.506063","Mar 17, 2026","Mar 17, 2026 4:21:26 PM","Mar 17, 2026 5:24:47 PM","1 hr 3 min"],[20,"33.994540","71.506007","Mar 17, 2026","Mar 17, 2026 6:23:07 PM","Mar 17, 2026 7:30:38 PM","1 hr 8 min"],[21,"34.002045","71.496798","Mar 17, 2026","Mar 17, 2026 7:48:45 PM","Mar 17, 2026 7:53:12 PM","4 min"],[22,"33.994622","71.506123","Mar 19, 2026","Mar 19, 2026 7:47:41 AM","Mar 19, 2026 11:50:40 AM","4 hr 3 min"],[23,"33.999455","71.496532","Mar 19, 2026","Mar 19, 2026 12:01:35 PM","Mar 19, 2026 12:40:56 PM","39 min"],[24,"33.992873","71.477308","Mar 19, 2026","Mar 19, 2026 12:54:18 PM","Mar 19, 2026 2:26:01 PM","1 hr 32 min"],[25,"33.994542","71.506160","Mar 19, 2026","Mar 19, 2026 2:35:16 PM","Mar 19, 2026 2:44:09 PM","9 min"],[26,"33.998970","71.496762","Mar 19, 2026","Mar 19, 2026 2:52:01 PM","Mar 19, 2026 2:53:59 PM","2 min"],[27,"33.994577","71.506003","Mar 19, 2026","Mar 19, 2026 3:01:36 PM","Mar 20, 2026 7:36:12 PM","28 hr 35 min"],[28,"34.001997","71.500032","Mar 20, 2026","Mar 20, 2026 7:43:18 PM","Mar 20, 2026 7:59:40 PM","16 min"],[29,"34.001565","71.498715","Mar 20, 2026","Mar 20, 2026 8:05:23 PM","Mar 20, 2026 8:17:42 PM","12 min"],[30,"34.003333","71.501758","Mar 20, 2026","Mar 20, 2026 8:20:32 PM","Mar 20, 2026 8:54:14 PM","34 min"],[31,"33.995355","71.503028","Mar 20, 2026","Mar 20, 2026 8:59:39 PM","Mar 20, 2026 10:44:28 PM","1 hr 45 min"],[32,"34.004477","71.504802","Mar 20, 2026","Mar 20, 2026 10:55:52 PM","Mar 20, 2026 10:59:19 PM","3 min"],[33,"33.998812","71.493995","Mar 20, 2026","Mar 20, 2026 11:04:34 PM","Mar 21, 2026 1:09:09 PM","14 hr 5 min"],[34,"34.000690","71.496675","Mar 21, 2026","Mar 21, 2026 1:14:37 PM","Mar 24, 2026 4:17:05 PM","75 hr 2 min"],[35,"34.008212","71.515497","Mar 24, 2026","Mar 24, 2026 4:30:27 PM","Mar 24, 2026 4:34:52 PM","4 min"],[36,"33.998907","71.493345","Mar 24, 2026","Mar 24, 2026 4:43:09 PM","Mar 24, 2026 5:46:08 PM","1 hr 3 min"],[37,"33.999647","71.496213","Mar 24, 2026","Mar 24, 2026 5:56:50 PM","Mar 29, 2026 7:21:07 PM","121 hr 24 min"],[38,"33.999923","71.496733","Mar 29, 2026","Mar 29, 2026 7:23:15 PM","Mar 30, 2026 5:56:57 AM","10 hr 34 min"],[39,"34.195347","72.018095","Mar 30, 2026","Mar 30, 2026 7:08:14 AM","Mar 30, 2026 7:15:12 AM","7 min"],[40,"33.588263","73.043428","Mar 30, 2026","Mar 30, 2026 9:05:16 AM","Mar 30, 2026 9:12:15 AM","7 min"],[41,"33.588820","73.041590","Mar 30, 2026","Mar 30, 2026 9:20:27 AM","Mar 31, 2026 2:35:55 PM","29 hr 15 min"],[42,"33.605115","73.057273","Mar 31, 2026","Mar 31, 2026 2:50:45 PM","Mar 31, 2026 3:15:44 PM","25 min"],[43,"33.599952","73.053815","Mar 31, 2026","Mar 31, 2026 3:25:50 PM","Mar 31, 2026 3:34:42 PM","9 min"],[44,"33.600187","73.050710","Mar 31, 2026","Mar 31, 2026 3:41:56 PM","Mar 31, 2026 4:09:22 PM","27 min"],[45,"33.589010","73.041570","Mar 31, 2026","Mar 31, 2026 4:24:04 PM","Apr 1, 2026 10:43:42 AM","18 hr 20 min"],[46,"33.601382","73.055045","Apr 01, 2026","Apr 1, 2026 10:55:50 AM","Apr 1, 2026 12:22:32 PM","1 hr 27 min"],[47,"33.602337","73.054970","Apr 01, 2026","Apr 1, 2026 12:36:29 PM","Apr 1, 2026 4:22:51 PM","3 hr 46 min"],[48,"33.605243","73.057237","Apr 01, 2026","Apr 1, 2026 4:48:27 PM","Apr 1, 2026 5:51:05 PM","1 hr 3 min"],[49,"33.588467","73.041560","Apr 01, 2026","Apr 1, 2026 6:10:48 PM","Apr 1, 2026 6:24:18 PM","14 min"],[50,"33.589398","73.041613","Apr 01, 2026","Apr 1, 2026 6:25:53 PM","Apr 2, 2026 9:55:23 AM","15 hr 30 min"],[51,"33.600622","73.051345","Apr 02, 2026","Apr 2, 2026 10:05:40 AM","Apr 2, 2026 11:00:40 AM","55 min"],[52,"33.589142","73.041740","Apr 02, 2026","Apr 2, 2026 11:13:46 AM","Apr 2, 2026 2:09:46 PM","2 hr 56 min"],[53,"33.602580","73.058717","Apr 02, 2026","Apr 2, 2026 2:23:00 PM","Apr 2, 2026 2:58:05 PM","35 min"],[54,"33.589035","73.041745","Apr 02, 2026","Apr 2, 2026 3:20:28 PM","Apr 2, 2026 4:37:15 PM","1 hr 17 min"],[55,"33.588708","73.041600","Apr 02, 2026","Apr 2, 2026 4:48:39 PM","Apr 2, 2026 5:08:55 PM","20 min"],[56,"34.131570","72.477193","Apr 02, 2026","Apr 2, 2026 7:05:10 PM","Apr 2, 2026 7:16:30 PM","11 min"],[57,"34.195448","72.018173","Apr 02, 2026","Apr 2, 2026 8:36:59 PM","Apr 2, 2026 8:46:58 PM","10 min"],[58,"34.008197","71.517765","Apr 02, 2026","Apr 2, 2026 10:03:07 PM","Apr 2, 2026 10:06:11 PM","3 min"],[59,"33.999932","71.496758","Apr 02, 2026","Apr 2, 2026 10:19:22 PM","Apr 3, 2026 9:46:27 AM","11 hr 27 min"],[60,"33.998562","71.455327","Apr 03, 2026","Apr 3, 2026 10:04:01 AM","Apr 3, 2026 10:19:37 AM","16 min"],[61,"33.999580","71.496095","Apr 03, 2026","Apr 3, 2026 10:34:28 AM","Apr 3, 2026 11:00:53 AM","26 min"],[62,"33.999952","71.496507","Apr 03, 2026","Apr 3, 2026 11:06:25 AM","Apr 6, 2026 12:44:23 PM","73 hr 38 min"],[63,"34.117622","71.098127","Apr 06, 2026","Apr 6, 2026 2:09:04 PM","Apr 6, 2026 2:52:44 PM","44 min"],[64,"34.121845","71.095760","Apr 06, 2026","Apr 6, 2026 2:58:49 PM","Apr 6, 2026 3:44:34 PM","46 min"],[65,"34.104308","71.157822","Apr 06, 2026","Apr 6, 2026 4:12:01 PM","Apr 6, 2026 4:17:41 PM","6 min"],[66,"34.114277","71.113928","Apr 06, 2026","Apr 6, 2026 4:44:54 PM","Apr 6, 2026 4:46:02 PM","1 min"],[67,"34.104458","71.157492","Apr 06, 2026","Apr 6, 2026 4:59:53 PM","Apr 7, 2026 12:53:23 PM","19 hr 53 min"],[68,"34.122015","71.095913","Apr 07, 2026","Apr 7, 2026 1:10:06 PM","Apr 7, 2026 4:02:07 PM","2 hr 52 min"],[69,"34.120357","71.096180","Apr 07, 2026","Apr 7, 2026 4:14:03 PM","Apr 7, 2026 4:26:13 PM","12 min"],[70,"34.115510","71.105595","Apr 07, 2026","Apr 7, 2026 4:43:10 PM","Apr 7, 2026 4:59:51 PM","17 min"],[71,"34.121947","71.095738","Apr 07, 2026","Apr 7, 2026 5:07:40 PM","Apr 7, 2026 5:54:07 PM","46 min"],[72,"34.120292","71.096200","Apr 07, 2026","Apr 7, 2026 5:58:55 PM","Apr 7, 2026 6:11:42 PM","13 min"],[73,"34.104268","71.157953","Apr 07, 2026","Apr 7, 2026 6:36:01 PM","Apr 9, 2026 1:06:15 PM","42 hr 30 min"],[74,"34.117908","71.098318","Apr 09, 2026","Apr 9, 2026 1:35:28 PM","Apr 9, 2026 1:39:11 PM","4 min"],[75,"34.104195","71.157927","Apr 09, 2026","Apr 9, 2026 2:03:33 PM","Apr 13, 2026 9:53:37 AM","91 hr 50 min"],[76,"34.104215","71.157925","Apr 13, 2026","Apr 13, 2026 10:23:55 AM","Apr 13, 2026 11:27:35 AM","1 hr 4 min"],[77,"34.007648","71.522573","Apr 13, 2026","Apr 13, 2026 1:49:11 PM","Apr 13, 2026 1:55:12 PM","6 min"],[78,"33.997187","71.491973","Apr 13, 2026","Apr 13, 2026 2:06:04 PM","Apr 13, 2026 2:08:51 PM","3 min"],[79,"34.117768","71.098320","Apr 13, 2026","Apr 13, 2026 3:35:12 PM","Apr 13, 2026 9:23:48 PM","5 hr 49 min"],[80,"34.104230","71.157843","Apr 13, 2026","Apr 13, 2026 9:47:00 PM","Apr 14, 2026 10:44:36 AM","12 hr 58 min"],[81,"34.117927","71.098215","Apr 14, 2026","Apr 14, 2026 11:16:11 AM","Apr 14, 2026 12:41:18 PM","1 hr 25 min"],[82,"34.104253","71.157862","Apr 14, 2026","Apr 14, 2026 1:05:01 PM","Apr 15, 2026 8:48:06 AM","19 hr 43 min"],[83,"34.015322","71.599350","Apr 15, 2026","Apr 15, 2026 10:15:14 AM","Apr 15, 2026 10:16:53 AM","2 min"],[84,"34.014830","71.581087","Apr 15, 2026","Apr 15, 2026 10:21:40 AM","Apr 15, 2026 10:25:47 AM","4 min"],[85,"33.997000","71.488445","Apr 15, 2026","Apr 15, 2026 10:46:46 AM","Apr 15, 2026 11:10:55 AM","24 min"],[86,"34.117867","71.098110","Apr 15, 2026","Apr 15, 2026 12:19:07 PM","Apr 15, 2026 6:36:45 PM","6 hr 18 min"],[87,"34.104982","71.157097","Apr 15, 2026","Apr 15, 2026 6:58:17 PM","Apr 18, 2026 3:38:00 PM","68 hr 40 min"],[88,"34.094910","71.140475","Apr 18, 2026","Apr 18, 2026 3:47:15 PM","Apr 18, 2026 4:06:35 PM","19 min"],[89,"34.104022","71.157983","Apr 18, 2026","Apr 18, 2026 4:22:10 PM","Apr 20, 2026 7:32:42 PM","51 hr 11 min"],[90,"33.994647","71.536785","Apr 20, 2026","Apr 20, 2026 8:58:44 PM","Apr 20, 2026 8:59:55 PM","1 min"],[91,"34.008238","71.517378","Apr 20, 2026","Apr 20, 2026 9:09:12 PM","Apr 20, 2026 9:19:44 PM","11 min"],[92,"33.999915","71.496750","Apr 20, 2026","Apr 20, 2026 9:27:52 PM","Apr 21, 2026 11:46:53 AM","14 hr 19 min"],[93,"33.998737","71.453965","Apr 21, 2026","Apr 21, 2026 12:00:21 PM","Apr 21, 2026 12:07:54 PM","8 min"],[94,"33.998383","71.453717","Apr 21, 2026","Apr 21, 2026 12:14:11 PM","Apr 21, 2026 3:26:50 PM","3 hr 13 min"],[95,"33.999757","71.496438","Apr 21, 2026","Apr 21, 2026 3:46:43 PM","May 6, 2026 11:17:37 AM","355 hr 31 min"],[96,"33.998462","71.422538","May 06, 2026","May 6, 2026 12:12:20 PM","May 6, 2026 12:15:23 PM","3 min"],[97,"34.015505","71.599280","May 06, 2026","May 6, 2026 1:01:32 PM","May 6, 2026 1:07:24 PM","6 min"],[98,"33.999880","71.496372","May 06, 2026","May 6, 2026 1:40:20 PM","May 6, 2026 2:25:04 PM","45 min"],[99,"34.104045","71.157988","May 06, 2026","May 6, 2026 4:03:23 PM","May 8, 2026 10:19:58 AM","42 hr 17 min"],[100,"34.117882","71.098043","May 08, 2026","May 8, 2026 10:40:47 AM","May 8, 2026 10:56:47 AM","16 min"],[101,"34.113952","71.109107","May 08, 2026","May 8, 2026 11:02:37 AM","May 8, 2026 12:22:14 PM","1 hr 20 min"],[102,"34.117928","71.098038","May 08, 2026","May 8, 2026 12:29:14 PM","May 8, 2026 1:06:07 PM","37 min"],[103,"34.119118","71.096462","May 08, 2026","May 8, 2026 1:07:38 PM","May 8, 2026 2:02:15 PM","55 min"],[104,"34.114043","71.109157","May 08, 2026","May 8, 2026 2:15:09 PM","May 8, 2026 3:29:46 PM","1 hr 15 min"],[105,"34.103998","71.157978","May 08, 2026","May 8, 2026 3:55:23 PM","May 11, 2026 11:55:28 AM","68 hr"],[106,"33.998512","71.496780","May 11, 2026","May 11, 2026 1:11:24 PM","May 11, 2026 3:27:37 PM","2 hr 16 min"],[107,"33.999685","71.496442","May 11, 2026","May 11, 2026 4:41:02 PM","May 11, 2026 4:55:39 PM","15 min"],[108,"34.005403","71.380050","May 11, 2026","May 11, 2026 5:22:47 PM","May 11, 2026 5:26:21 PM","4 min"],[109,"34.104423","71.157683","May 11, 2026","May 11, 2026 6:14:40 PM","May 11, 2026 6:17:21 PM","3 min"],[110,"34.117827","71.098142","May 11, 2026","May 11, 2026 6:34:17 PM","May 12, 2026 11:55:02 AM","17 hr 21 min"],[111,"34.104218","71.157943","May 12, 2026","May 12, 2026 12:14:31 PM","May 12, 2026 12:32:30 PM","18 min"],[112,"33.999440","71.496462","May 12, 2026","May 12, 2026 1:48:46 PM","May 12, 2026 2:10:56 PM","22 min"],[113,"34.091637","72.070542","May 12, 2026","May 12, 2026 3:24:26 PM","May 12, 2026 3:35:43 PM","11 min"],[114,"33.726330","73.095268","May 12, 2026","May 12, 2026 5:23:04 PM","May 12, 2026 5:49:26 PM","26 min"],[115,"33.713555","73.063835","May 12, 2026","May 12, 2026 6:04:43 PM","May 12, 2026 6:39:04 PM","34 min"],[116,"33.494885","73.099763","May 12, 2026","May 12, 2026 7:42:47 PM","May 12, 2026 8:14:15 PM","31 min"],[117,"34.047470","72.415670","May 12, 2026","May 12, 2026 10:18:27 PM","May 12, 2026 10:33:25 PM","15 min"],[118,"34.131605","72.477163","May 12, 2026","May 12, 2026 10:58:02 PM","May 13, 2026 8:54:43 AM","9 hr 57 min"],[119,"34.133177","72.465757","May 13, 2026","May 13, 2026 9:09:06 AM","May 13, 2026 9:41:34 AM","32 min"],[120,"34.128693","72.473295","May 13, 2026","May 13, 2026 9:49:45 AM","May 13, 2026 9:58:07 AM","8 min"],[121,"34.128772","72.473297","May 13, 2026","May 13, 2026 10:05:51 AM","May 13, 2026 10:07:28 AM","2 min"],[122,"34.030117","71.664648","May 13, 2026","May 13, 2026 11:25:19 AM","May 13, 2026 11:27:18 AM","2 min"],[123,"34.000305","71.496878","May 13, 2026","May 13, 2026 11:58:26 AM","May 13, 2026 12:06:39 PM","8 min"],[124,"33.998613","71.455345","May 13, 2026","May 13, 2026 12:20:05 PM","May 13, 2026 12:43:33 PM","23 min"],[125,"33.998385","71.424388","May 13, 2026","May 13, 2026 12:53:16 PM","May 13, 2026 1:05:42 PM","12 min"],[126,"34.072820","71.211683","May 13, 2026","May 13, 2026 2:00:46 PM","May 13, 2026 2:18:15 PM","17 min"],[127,"34.104025","71.157993","May 13, 2026","May 13, 2026 2:31:39 PM","May 14, 2026 11:39:13 AM","21 hr 8 min"],[128,"33.996680","71.423463","May 14, 2026","May 14, 2026 12:48:19 PM","May 14, 2026 1:36:26 PM","48 min"],[129,"33.998668","71.419268","May 14, 2026","May 14, 2026 1:41:42 PM","May 14, 2026 1:43:24 PM","2 min"],[130,"34.104018","71.158012","May 14, 2026","May 14, 2026 2:39:03 PM","May 15, 2026 9:57:00 AM","19 hr 18 min"],[131,"34.114007","71.109210","May 15, 2026","May 15, 2026 10:09:56 AM","May 15, 2026 11:15:16 AM","1 hr 5 min"],[132,"34.122058","71.095953","May 15, 2026","May 15, 2026 11:24:32 AM","May 15, 2026 12:22:50 PM","58 min"],[133,"34.114038","71.109283","May 15, 2026","May 15, 2026 12:28:02 PM","May 15, 2026 1:11:26 PM","43 min"],[134,"34.119287","71.097278","May 15, 2026","May 15, 2026 1:15:58 PM","May 15, 2026 1:20:38 PM","5 min"],[135,"34.122052","71.095948","May 15, 2026","May 15, 2026 1:27:00 PM","May 15, 2026 1:36:20 PM","9 min"],[136,"34.117918","71.098295","May 15, 2026","May 15, 2026 1:45:44 PM","May 15, 2026 2:24:23 PM","39 min"],[137,"34.104008","71.157903","May 15, 2026","May 15, 2026 2:51:44 PM","May 15, 2026 3:35:14 PM","44 min"],[138,"33.998738","71.424832","May 15, 2026","May 15, 2026 4:26:55 PM","May 15, 2026 4:29:07 PM","2 min"],[139,"34.010153","71.513355","May 15, 2026","May 15, 2026 4:47:16 PM","May 15, 2026 5:49:05 PM","1 hr 2 min"],[140,"33.999857","71.496402","May 15, 2026","May 15, 2026 6:02:20 PM","May 19, 2026 9:36:05 AM","87 hr 34 min"],[141,"34.008188","71.515540","May 19, 2026","May 19, 2026 9:49:56 AM","May 19, 2026 10:06:54 AM","17 min"],[142,"34.008228","71.515413","May 19, 2026","May 19, 2026 10:21:01 AM","May 19, 2026 10:30:40 AM","10 min"],[143,"33.999762","71.496508","May 19, 2026","May 19, 2026 10:41:14 AM","May 19, 2026 1:01:14 PM","2 hr 20 min"],[144,"34.008915","71.505607","May 19, 2026","May 19, 2026 1:13:30 PM","May 19, 2026 1:19:16 PM","6 min"],[145,"33.999917","71.496423","May 19, 2026","May 19, 2026 1:37:13 PM","May 19, 2026 6:01:38 PM","4 hr 24 min"],[146,"33.999735","71.496433","May 19, 2026","May 19, 2026 6:10:02 PM","Jun 13, 2026 9:11:07 AM","591 hr 1 min"],[147,"33.999588","71.496485","Jun 13, 2026","Jun 13, 2026 9:38:56 AM","Jun 13, 2026 10:01:10 AM","22 min"],[148,"33.965017","71.498798","Jun 13, 2026","Jun 13, 2026 10:29:02 AM","Jun 13, 2026 10:52:11 AM","23 min"],[149,"33.965003","71.498868","Jun 13, 2026","Jun 13, 2026 10:55:58 AM","Jun 13, 2026 12:03:10 PM","1 hr 7 min"],[150,"33.999148","71.428400","Jun 13, 2026","Jun 13, 2026 12:19:49 PM","Jun 13, 2026 12:25:46 PM","6 min"],[151,"33.965088","71.498787","Jun 13, 2026","Jun 13, 2026 1:04:14 PM","Jun 14, 2026 12:40:16 PM","23 hr 36 min"],[152,"33.965453","71.497278","Jun 14, 2026","Jun 14, 2026 12:57:15 PM","Jun 14, 2026 1:36:49 PM","40 min"],[153,"33.963812","71.527953","Jun 14, 2026","Jun 14, 2026 1:49:29 PM","Jun 14, 2026 2:27:02 PM","38 min"],[154,"33.997885","71.497015","Jun 14, 2026","Jun 14, 2026 2:45:06 PM","Jun 14, 2026 6:28:44 PM","3 hr 44 min"],[155,"33.965042","71.498833","Jun 14, 2026","Jun 14, 2026 6:46:04 PM","Jun 15, 2026 11:15:22 AM","16 hr 29 min"],[156,"33.965077","71.498867","Jun 15, 2026","Jun 15, 2026 11:22:33 AM","Jun 15, 2026 11:39:58 AM","17 min"],[157,"33.998468","71.496810","Jun 15, 2026","Jun 15, 2026 12:00:13 PM","Jun 15, 2026 1:00:26 PM","1 hr"],[158,"34.104465","71.157528","Jun 15, 2026","Jun 15, 2026 2:28:24 PM","Jun 15, 2026 2:41:26 PM","13 min"],[159,"34.117902","71.098275","Jun 15, 2026","Jun 15, 2026 3:20:44 PM","Jun 15, 2026 3:32:25 PM","12 min"],[160,"34.113932","71.109255","Jun 15, 2026","Jun 15, 2026 3:57:33 PM","Jun 15, 2026 4:16:21 PM","19 min"],[161,"34.103928","71.157967","Jun 15, 2026","Jun 15, 2026 5:00:38 PM","Jun 15, 2026 5:52:20 PM","52 min"],[162,"34.094392","71.142392","Jun 15, 2026","Jun 15, 2026 6:05:15 PM","Jun 15, 2026 6:13:01 PM","8 min"],[163,"34.103938","71.157993","Jun 15, 2026","Jun 15, 2026 6:19:16 PM","Jun 16, 2026 10:43:39 AM","16 hr 24 min"],[164,"34.103960","71.157915","Jun 16, 2026","Jun 16, 2026 10:44:30 AM","Jun 16, 2026 3:04:19 PM","4 hr 20 min"],[165,"34.094797","71.141440","Jun 16, 2026","Jun 16, 2026 3:13:42 PM","Jun 16, 2026 3:31:57 PM","18 min"],[166,"34.103948","71.157937","Jun 16, 2026","Jun 16, 2026 3:46:56 PM","Jun 17, 2026 8:19:42 AM","16 hr 33 min"]],"route":[["📍  ROUTE COORDINATES",null,null],["Vehicle: LEG-5289   |   Total Points: 3464",null,null],[null,null,null],["Point #","Latitude","Longitude"],[1,"33.999947","71.496613"],[2,"33.999893","71.496430"],[3,"33.997102","71.500993"],[4,"33.995428","71.502600"],[5,"33.995625","71.501253"],[6,"34.004912","71.483257"],[7,"33.995082","71.504765"],[8,"33.999777","71.496090"],[9,"33.995122","71.504807"],[10,"33.996015","71.500775"],[11,"33.995118","71.505695"],[12,"33.989172","71.489413"],[13,"33.972498","71.481278"],[14,"33.981452","71.480747"],[15,"33.995908","71.500857"],[16,"33.997832","71.493362"],[17,"34.004485","71.483387"],[18,"33.997660","71.500918"],[19,"33.994267","71.510580"],[20,"33.986437","71.513070"],[21,"33.962785","71.501440"],[22,"33.994580","71.506020"],[23,"34.002332","71.483970"],[24,"34.014903","71.483738"],[25,"34.024868","71.480837"],[26,"34.034188","71.480605"],[27,"34.043877","71.476652"],[28,"34.067090","71.464342"],[29,"34.064243","71.458017"],[30,"34.060550","71.451813"],[31,"34.055822","71.431600"],[32,"34.035925","71.437507"],[33,"34.028927","71.446218"],[34,"33.999002","71.469273"],[35,"34.004748","71.504610"],[36,"34.000438","71.500247"],[37,"34.001993","71.484810"],[38,"34.001625","71.486330"],[39,"33.997912","71.489000"],[40,"33.997572","71.498298"],[41,"33.998968","71.496865"],[42,"33.995548","71.502235"],[43,"34.004472","71.510520"],[44,"34.004862","71.510520"],[45,"33.999738","71.495620"],[46,"33.995498","71.503523"],[47,"33.994977","71.505780"],[48,"33.998022","71.492273"],[49,"34.000253","71.491330"],[50,"34.007975","71.510882"],[51,"34.006200","71.534810"],[52,"33.995677","71.535983"],[53,"33.992168","71.533377"],[54,"33.974498","71.514862"],[55,"33.994580","71.506003"],[56,"34.002095","71.497792"],[57,"33.994622","71.506123"],[58,"33.998935","71.496798"],[59,"33.993595","71.478977"],[60,"33.993018","71.482692"],[61,"33.995215","71.504187"],[62,"33.997620","71.500957"],[63,"33.995677","71.501075"],[64,"33.994817","71.505993"],[65,"34.001965","71.500117"],[66,"34.002425","71.500175"],[67,"33.998468","71.500380"],[68,"33.994518","71.506078"],[69,"34.004455","71.504803"],[70,"33.997672","71.491952"],[71,"33.994570","71.506187"],[72,"33.999857","71.496765"],[73,"33.999993","71.496685"],[74,"34.009058","71.513668"],[75,"34.008828","71.513473"],[76,"33.998980","71.493227"],[77,"33.998910","71.493327"],[78,"33.999647","71.496213"],[79,"34.000013","71.496607"],[80,"33.999828","71.496772"],[81,"33.999967","71.496562"],[82,"33.999130","71.494052"],[83,"34.008390","71.517970"],[84,"34.011437","71.539785"],[85,"34.014572","71.566808"],[86,"34.015990","71.598877"],[87,"34.018283","71.634015"],[88,"34.027762","71.654220"],[89,"34.055380","71.702960"],[90,"34.089955","71.739502"],[91,"34.109898","71.743983"],[92,"34.120817","71.792142"],[93,"34.116763","71.836233"],[94,"34.113363","71.868960"],[95,"34.111423","71.900645"],[96,"34.108087","71.967082"],[97,"34.112060","72.019095"],[98,"34.131098","72.024763"],[99,"34.179402","72.032088"],[100,"34.194655","72.033318"],[101,"34.196578","72.015273"],[102,"34.195347","72.018095"],[103,"34.193898","72.025520"],[104,"34.166143","72.026210"],[105,"34.137442","72.026542"],[106,"34.120202","72.021723"],[107,"34.101110","72.050695"],[108,"34.074925","72.086573"],[109,"34.066405","72.124143"],[110,"34.066180","72.171795"],[111,"34.067178","72.215700"],[112,"34.068962","72.257150"],[113,"34.071825","72.296052"],[114,"34.071050","72.328972"],[115,"34.046518","72.405370"],[116,"34.003223","72.416470"],[117,"33.966213","72.447358"],[118,"33.944790","72.461202"],[119,"33.929780","72.507962"],[120,"33.907350","72.539347"],[121,"33.861730","72.587800"],[122,"33.830977","72.626568"],[123,"33.802048","72.649465"],[124,"33.791965","72.660082"],[125,"33.741217","72.706568"],[126,"33.687423","72.749680"],[127,"33.677283","72.774510"],[128,"33.673992","72.797785"],[129,"33.631748","72.842747"],[130,"33.600477","72.864668"],[131,"33.596852","72.878925"],[132,"33.606323","72.894625"],[133,"33.626717","72.931833"],[134,"33.628763","72.943798"],[135,"33.620802","72.978875"],[136,"33.614865","72.991673"],[137,"33.609137","73.009793"],[138,"33.592493","73.043327"],[139,"33.588820","73.041590"],[140,"33.588908","73.041670"],[141,"33.598140","73.045052"],[142,"33.605115","73.057273"],[143,"33.602625","73.052935"],[144,"33.600445","73.053798"],[145,"33.600553","73.051838"],[146,"33.599002","73.048465"],[147,"33.596380","73.041543"],[148,"33.601453","73.055007"],[149,"33.607040","73.057462"],[150,"33.602337","73.054970"],[151,"33.600553","73.051325"],[152,"33.600792","73.051433"],[153,"33.600835","73.056357"],[154,"33.605188","73.057232"],[155,"33.593242","73.048902"],[156,"33.589157","73.041865"],[157,"33.589398","73.041613"],[158,"33.600313","73.047868"],[159,"33.599848","73.049452"],[160,"33.600413","73.047683"],[161,"33.593037","73.048447"],[162,"33.607945","73.057652"],[163,"33.587328","73.042300"],[164,"33.589117","73.041713"],[165,"33.588638","73.041517"],[166,"33.590118","73.044363"],[167,"33.608280","73.012062"],[168,"33.625420","72.969487"],[169,"33.626518","72.946700"],[170,"33.612540","72.904837"],[171,"33.585972","72.870958"],[172,"33.624778","72.847850"],[173,"33.660410","72.821108"],[174,"33.676852","72.777480"],[175,"33.703635","72.735818"],[176,"33.738157","72.708527"],[177,"33.771638","72.678997"],[178,"33.802943","72.647455"],[179,"33.837152","72.624592"],[180,"33.861675","72.587615"],[181,"33.886825","72.551053"],[182,"33.918250","72.527218"],[183,"33.938368","72.487425"],[184,"33.958678","72.451863"],[185,"33.992803","72.427487"],[186,"34.030723","72.411812"],[187,"34.047273","72.414278"],[188,"34.075393","72.453947"],[189,"34.106340","72.464803"],[190,"34.131570","72.477193"],[191,"34.130705","72.472837"],[192,"34.130030","72.465785"],[193,"34.145155","72.441828"],[194,"34.166008","72.411588"],[195,"34.179192","72.397072"],[196,"34.202168","72.366725"],[197,"34.211957","72.333842"],[198,"34.211845","72.304327"],[199,"34.215043","72.276990"],[200,"34.219027","72.267035"],[201,"34.230623","72.229495"],[202,"34.228620","72.188285"],[203,"34.227532","72.147172"],[204,"34.225918","72.118955"],[205,"34.220467","72.104060"],[206,"34.208290","72.075772"],[207,"34.208052","72.036417"],[208,"34.206652","72.027288"],[209,"34.195448","72.018173"],[210,"34.179798","72.026298"],[211,"34.175303","72.024382"],[212,"34.156202","72.028548"],[213,"34.128503","72.024208"],[214,"34.104880","72.020047"],[215,"34.109032","71.986240"],[216,"34.110602","71.925512"],[217,"34.111448","71.896028"],[218,"34.115048","71.841380"],[219,"34.117753","71.785903"],[220,"34.109267","71.743670"],[221,"34.085690","71.727192"],[222,"34.052373","71.700855"],[223,"34.028442","71.658963"],[224,"34.017548","71.647947"],[225,"34.017218","71.627255"],[226,"34.016190","71.608270"],[227,"34.015473","71.591480"],[228,"34.014548","71.556978"],[229,"34.005442","71.534105"],[230,"34.005580","71.506843"],[231,"33.999475","71.500345"],[232,"33.999612","71.495868"],[233,"33.998568","71.496807"],[234,"33.996932","71.454608"],[235,"33.998768","71.453977"],[236,"33.997820","71.468660"],[237,"33.997552","71.496803"],[238,"33.997927","71.493640"],[239,"33.999205","71.496572"],[240,"33.997770","71.484543"],[241,"33.997052","71.450272"],[242,"33.998575","71.419687"],[243,"33.999953","71.393023"],[244,"34.002275","71.363790"],[245,"34.004595","71.317287"],[246,"34.006557","71.298220"],[247,"34.006523","71.291060"],[248,"34.017887","71.282340"],[249,"34.022897","71.263520"],[250,"34.040538","71.254215"],[251,"34.050657","71.249807"],[252,"34.059562","71.233778"],[253,"34.073790","71.208440"],[254,"34.082943","71.177622"],[255,"34.105230","71.154715"],[256,"34.107150","71.148700"],[257,"34.104605","71.130088"],[258,"34.105777","71.126167"],[259,"34.113573","71.112840"],[260,"34.117857","71.098063"],[261,"34.117965","71.097763"],[262,"34.113358","71.109882"],[263,"34.113468","71.113335"],[264,"34.111993","71.120000"],[265,"34.102470","71.139667"],[266,"34.103973","71.157958"],[267,"34.107148","71.150247"],[268,"34.105193","71.128115"],[269,"34.110715","71.117448"],[270,"34.113577","71.105535"],[271,"34.114277","71.113928"],[272,"34.105907","71.126407"],[273,"34.104458","71.157492"],[274,"34.104153","71.157855"],[275,"34.104763","71.142905"],[276,"34.106210","71.126752"],[277,"34.113892","71.111153"],[278,"34.122052","71.095955"],[279,"34.119647","71.098078"],[280,"34.115870","71.101990"],[281,"34.115645","71.105795"],[282,"34.121947","71.095738"],[283,"34.120380","71.096198"],[284,"34.113502","71.113975"],[285,"34.109533","71.120368"],[286,"34.107137","71.150825"],[287,"34.104125","71.157843"],[288,"34.104123","71.157783"],[289,"34.102103","71.139628"],[290,"34.105748","71.125300"],[291,"34.114395","71.111930"],[292,"34.112243","71.106987"],[293,"34.119372","71.098057"],[294,"34.110528","71.117677"],[295,"34.100848","71.137162"],[296,"34.103105","71.142327"],[297,"34.104195","71.157927"],[298,"34.104045","71.158005"],[299,"34.104538","71.157387"],[300,"34.107103","71.150272"],[301,"34.104253","71.132728"],[302,"34.105262","71.121302"],[303,"34.114322","71.113747"],[304,"34.119133","71.097223"],[305,"34.112930","71.108420"],[306,"34.109613","71.120160"],[307,"34.103800","71.131450"],[308,"34.104195","71.157933"],[309,"34.088728","71.165822"],[310,"34.074738","71.204613"],[311,"34.073572","71.209518"],[312,"34.072373","71.214697"],[313,"34.056355","71.248022"],[314,"34.043237","71.255232"],[315,"34.025392","71.261687"],[316,"34.019607","71.279273"],[317,"34.005680","71.292955"],[318,"34.007113","71.302285"],[319,"34.004345","71.309988"],[320,"34.001650","71.321870"],[321,"34.004912","71.333930"],[322,"34.004185","71.351862"],[323,"34.000472","71.394205"],[324,"33.997933","71.434490"],[325,"33.997088","71.453132"],[326,"33.997930","71.469547"],[327,"34.008940","71.513822"],[328,"34.007785","71.536562"],[329,"34.014620","71.561840"],[330,"34.016182","71.600393"],[331,"34.015422","71.589693"],[332,"34.007648","71.522573"],[333,"34.008062","71.521133"],[334,"33.995718","71.490615"],[335,"33.996657","71.458602"],[336,"33.997468","71.437455"],[337,"33.997923","71.404010"],[338,"34.003267","71.385668"],[339,"34.002497","71.360570"],[340,"34.003920","71.332157"],[341,"34.003812","71.317887"],[342,"34.006472","71.313252"],[343,"34.009995","71.295188"],[344,"34.020008","71.278070"],[345,"34.022938","71.263535"],[346,"34.034255","71.258732"],[347,"34.051628","71.250442"],[348,"34.059745","71.228553"],[349,"34.075627","71.202065"],[350,"34.080697","71.183423"],[351,"34.091838","71.159390"],[352,"34.105027","71.152933"],[353,"34.101545","71.136575"],[354,"34.108375","71.121215"],[355,"34.113982","71.110282"],[356,"34.121585","71.095978"],[357,"34.117922","71.097945"],[358,"34.114513","71.112285"],[359,"34.111897","71.120003"],[360,"34.103007","71.134513"],[361,"34.104198","71.157815"],[362,"34.103792","71.142487"],[363,"34.105893","71.127347"],[364,"34.113880","71.106400"],[365,"34.117897","71.098045"],[366,"34.111560","71.118763"],[367,"34.104662","71.130520"],[368,"34.103477","71.142478"],[369,"34.104263","71.157822"],[370,"34.104143","71.158015"],[371,"34.096010","71.154777"],[372,"34.082385","71.179163"],[373,"34.077295","71.196775"],[374,"34.064885","71.223000"],[375,"34.058333","71.245242"],[376,"34.042308","71.254387"],[377,"34.022057","71.267547"],[378,"34.018028","71.282408"],[379,"34.015945","71.284055"],[380,"34.005875","71.293428"],[381,"34.007208","71.298840"],[382,"34.000933","71.327612"],[383,"34.002873","71.358877"],[384,"34.005872","71.382747"],[385,"33.999362","71.408630"],[386,"33.997393","71.444683"],[387,"33.998027","71.469800"],[388,"34.004610","71.504252"],[389,"34.006775","71.532942"],[390,"34.014672","71.557242"],[391,"34.016020","71.598953"],[392,"34.014830","71.581087"],[393,"34.014535","71.560292"],[394,"34.008137","71.520222"],[395,"33.997260","71.488340"],[396,"33.997302","71.439955"],[397,"33.998418","71.421310"],[398,"34.002092","71.386793"],[399,"34.005362","71.383372"],[400,"34.006138","71.380643"],[401,"34.003077","71.357325"],[402,"34.004653","71.317243"],[403,"34.006027","71.306388"],[404,"34.010223","71.295568"],[405,"34.017765","71.282365"],[406,"34.031547","71.259140"],[407,"34.056773","71.247032"],[408,"34.068913","71.220967"],[409,"34.079612","71.186563"],[410,"34.105240","71.154688"],[411,"34.105150","71.130865"],[412,"34.110603","71.117450"],[413,"34.117867","71.098110"],[414,"34.114003","71.106330"],[415,"34.112817","71.113537"],[416,"34.106208","71.123235"],[417,"34.106248","71.152405"],[418,"34.104023","71.158017"],[419,"34.094153","71.142850"],[420,"34.094472","71.142207"],[421,"34.104022","71.157983"],[422,"34.103902","71.157975"],[423,"34.103997","71.157953"],[424,"34.093000","71.156453"],[425,"34.081788","71.180328"],[426,"34.074577","71.204990"],[427,"34.059520","71.230238"],[428,"34.040487","71.254175"],[429,"34.025312","71.261657"],[430,"34.021865","71.267247"],[431,"34.018718","71.281147"],[432,"34.006642","71.291263"],[433,"34.008017","71.297977"],[434,"34.007200","71.301768"],[435,"34.004745","71.308907"],[436,"34.003742","71.354122"],[437,"34.007728","71.375045"],[438,"34.001528","71.396868"],[439,"33.999320","71.409097"],[440,"33.996698","71.461765"],[441,"33.998380","71.477060"],[442,"34.005008","71.505257"],[443,"34.006407","71.534455"],[444,"33.998428","71.533590"],[445,"33.999193","71.544378"],[446,"34.001593","71.530328"],[447,"34.006665","71.509027"],[448,"33.999922","71.496788"],[449,"33.997577","71.490705"],[450,"33.996945","71.453983"],[451,"33.998727","71.453957"],[452,"33.996988","71.456458"],[453,"33.997582","71.494543"],[454,"33.999757","71.496438"],[455,"34.103882","71.157993"],[456,"34.104022","71.157640"],[457,"34.088273","71.166562"],[458,"34.083590","71.175955"],[459,"34.071693","71.219208"],[460,"34.056877","71.247015"],[461,"34.032645","71.259778"],[462,"34.030208","71.261433"],[463,"34.018890","71.281822"],[464,"34.008857","71.294915"],[465,"34.008840","71.298718"],[466,"34.006010","71.316005"],[467,"34.002802","71.359182"],[468,"34.005603","71.383117"],[469,"33.998463","71.422230"],[470,"33.997757","71.434762"],[471,"33.997375","71.444945"],[472,"34.001730","71.498850"],[473,"34.008368","71.519100"],[474,"34.014407","71.549658"],[475,"34.015483","71.586055"],[476,"34.015505","71.599280"],[477,"34.014737","71.578077"],[478,"34.013937","71.543400"],[479,"34.006043","71.533615"],[480,"34.008463","71.516200"],[481,"33.999857","71.496452"],[482,"33.997985","71.481673"],[483,"33.997085","71.448658"],[484,"33.996937","71.456893"],[485,"33.997372","71.440713"],[486,"33.999367","71.401008"],[487,"34.002678","71.367733"],[488,"34.005198","71.342435"],[489,"34.001052","71.328240"],[490,"34.006417","71.312940"],[491,"34.009450","71.296867"],[492,"34.018797","71.281958"],[493,"34.030410","71.260622"],[494,"34.042138","71.254238"],[495,"34.059523","71.232772"],[496,"34.078990","71.188513"],[497,"34.090873","71.161302"],[498,"34.104013","71.157900"],[499,"34.105698","71.152535"],[500,"34.105467","71.120857"],[501,"34.117882","71.098043"],[502,"34.113903","71.109658"],[503,"34.118027","71.098012"],[504,"34.117862","71.098140"],[505,"34.115358","71.104000"],[506,"34.119158","71.097370"],[507,"34.113913","71.113060"],[508,"34.111315","71.116875"],[509,"34.102547","71.134585"],[510,"34.105520","71.152702"],[511,"34.104065","71.157372"],[512,"34.085552","71.169623"],[513,"34.079103","71.188053"],[514,"34.071257","71.219962"],[515,"34.049825","71.250245"],[516,"34.045868","71.255417"],[517,"34.032280","71.259918"],[518,"34.022375","71.268018"],[519,"34.015612","71.284212"],[520,"34.008172","71.288780"],[521,"34.010270","71.295670"],[522,"34.004348","71.309912"],[523,"34.001643","71.321823"],[524,"34.001977","71.329045"],[525,"34.003653","71.354660"],[526,"34.001187","71.385603"],[527,"33.997453","71.443788"],[528,"33.997663","71.467653"],[529,"33.998512","71.496780"],[530,"33.998653","71.496803"],[531,"34.008405","71.520698"],[532,"34.008710","71.537275"],[533,"34.014683","71.553330"],[534,"34.015325","71.582683"],[535,"34.016023","71.602515"],[536,"34.014443","71.569285"],[537,"34.013925","71.543483"],[538,"34.005593","71.506955"],[539,"33.997658","71.485998"],[540,"33.997002","71.451290"],[541,"33.997163","71.446183"],[542,"33.998055","71.404657"],[543,"34.006008","71.380010"],[544,"34.007253","71.376852"],[545,"34.004883","71.345065"],[546,"34.003693","71.317962"],[547,"34.004298","71.309720"],[548,"34.009152","71.295870"],[549,"34.020937","71.275623"],[550,"34.025800","71.261852"],[551,"34.052238","71.251015"],[552,"34.070947","71.220408"],[553,"34.079692","71.186363"],[554,"34.091735","71.159665"],[555,"34.104443","71.157513"],[556,"34.102612","71.141635"],[557,"34.105782","71.126353"],[558,"34.111870","71.112635"],[559,"34.117827","71.098142"],[560,"34.114885","71.103440"],[561,"34.111337","71.116690"],[562,"34.106287","71.126897"],[563,"34.105633","71.146357"],[564,"34.104085","71.157363"],[565,"34.089523","71.164577"],[566,"34.080673","71.183040"],[567,"34.074945","71.204038"],[568,"34.060147","71.227383"],[569,"34.048143","71.252857"],[570,"34.033113","71.260098"],[571,"34.022017","71.267468"],[572,"34.011465","71.286860"],[573,"34.010273","71.295778"],[574,"34.005447","71.316653"],[575,"34.003270","71.356895"],[576,"34.000122","71.393205"],[577,"33.999410","71.413948"],[578,"33.997678","71.467460"],[579,"33.999440","71.496462"],[580,"33.999418","71.495077"],[581,"34.002175","71.499865"],[582,"34.013505","71.541323"],[583,"34.014565","71.566722"],[584,"34.016007","71.599468"],[585,"34.024720","71.627117"],[586,"34.040348","71.678213"],[587,"34.069458","71.709602"],[588,"34.091595","71.740757"],[589,"34.113705","71.750950"],[590,"34.126202","71.809287"],[591,"34.116300","71.837860"],[592,"34.111713","71.892167"],[593,"34.108920","71.960467"],[594,"34.108717","72.010533"],[595,"34.091205","72.070842"],[596,"34.070778","72.091615"],[597,"34.065537","72.135768"],[598,"34.066690","72.193502"],[599,"34.069825","72.269815"],[600,"34.071178","72.327118"],[601,"34.056067","72.393213"],[602,"34.036180","72.412063"],[603,"33.993595","72.426968"],[604,"33.945618","72.460483"],[605,"33.933123","72.502695"],[606,"33.902943","72.541633"],[607,"33.862783","72.587182"],[608,"33.835912","72.625147"],[609,"33.801030","72.651705"],[610,"33.765392","72.685192"],[611,"33.718787","72.724237"],[612,"33.677850","72.768380"],[613,"33.664382","72.818255"],[614,"33.626767","72.846522"],[615,"33.596577","72.865610"],[616,"33.593895","72.877190"],[617,"33.623705","72.927597"],[618,"33.633362","72.949092"],[619,"33.653938","72.989045"],[620,"33.679205","73.037023"],[621,"33.681238","73.040762"],[622,"33.697245","73.071597"],[623,"33.714338","73.103918"],[624,"33.725977","73.095253"],[625,"33.726553","73.088122"],[626,"33.713555","73.063835"],[627,"33.693000","73.065925"],[628,"33.649863","73.098390"],[629,"33.624512","73.117275"],[630,"33.622428","73.118838"],[631,"33.594368","73.139915"],[632,"33.574177","73.154873"],[633,"33.535375","73.181912"],[634,"33.535802","73.166757"],[635,"33.521950","73.151067"],[636,"33.535122","73.127420"],[637,"33.529738","73.111063"],[638,"33.522023","73.092215"],[639,"33.519898","73.088215"],[640,"33.499617","73.100480"],[641,"33.494738","73.102682"],[642,"33.494110","73.104923"],[643,"33.502838","73.095430"],[644,"33.516453","73.084550"],[645,"33.523928","73.097208"],[646,"33.527393","73.110733"],[647,"33.544612","73.105017"],[648,"33.560858","73.086618"],[649,"33.567780","73.076298"],[650,"33.589613","73.055797"],[651,"33.609802","73.007218"],[652,"33.619170","72.980863"],[653,"33.628522","72.943607"],[654,"33.614520","72.909043"],[655,"33.606363","72.894818"],[656,"33.591975","72.868753"],[657,"33.623710","72.848560"],[658,"33.668943","72.814310"],[659,"33.684862","72.751790"],[660,"33.706312","72.733353"],[661,"33.725582","72.718513"],[662,"33.770015","72.680415"],[663,"33.801492","72.650150"],[664,"33.849397","72.618183"],[665,"33.872580","72.574197"],[666,"33.889680","72.546748"],[667,"33.930123","72.506942"],[668,"33.962365","72.449490"],[669,"34.006923","72.412957"],[670,"34.035635","72.411758"],[671,"34.047470","72.415670"],[672,"34.065738","72.440028"],[673,"34.090010","72.462462"],[674,"34.099602","72.463510"],[675,"34.119138","72.465100"],[676,"34.131632","72.477280"],[677,"34.127732","72.473815"],[678,"34.133177","72.465757"],[679,"34.132885","72.462972"],[680,"34.131648","72.476923"],[681,"34.128772","72.473297"],[682,"34.112767","72.464695"],[683,"34.088005","72.461327"],[684,"34.069628","72.446028"],[685,"34.049547","72.420823"],[686,"34.050083","72.400403"],[687,"34.070482","72.341418"],[688,"34.069693","72.271112"],[689,"34.067645","72.232492"],[690,"34.066315","72.186587"],[691,"34.064905","72.104782"],[692,"34.103395","72.038453"],[693,"34.107785","72.015295"],[694,"34.108692","71.961340"],[695,"34.111377","71.898567"],[696,"34.117455","71.833412"],[697,"34.117287","71.781257"],[698,"34.095547","71.741658"],[699,"34.070030","71.710060"],[700,"34.037230","71.675082"],[701,"34.025535","71.644638"],[702,"34.018540","71.637225"],[703,"34.016822","71.617853"],[704,"34.015205","71.584340"],[705,"34.014600","71.559625"],[706,"34.006773","71.509078"],[707,"34.000693","71.497463"],[708,"33.997767","71.484147"],[709,"33.996925","71.455258"],[710,"33.998822","71.453953"],[711,"33.997093","71.450547"],[712,"33.998332","71.424022"],[713,"33.998298","71.402873"],[714,"34.004075","71.352348"],[715,"34.004132","71.332875"],[716,"34.006653","71.302827"],[717,"34.008777","71.294805"],[718,"34.006405","71.291448"],[719,"34.023767","71.264728"],[720,"34.038425","71.254350"],[721,"34.056017","71.248745"],[722,"34.072010","71.218455"],[723,"34.078473","71.190058"],[724,"34.088223","71.166497"],[725,"34.103968","71.157620"],[726,"34.094245","71.155032"],[727,"34.085843","71.169118"],[728,"34.076995","71.195303"],[729,"34.064910","71.222993"],[730,"34.056590","71.247550"],[731,"34.041493","71.254085"],[732,"34.023060","71.263842"],[733,"34.010623","71.286825"],[734,"34.008625","71.296742"],[735,"34.004380","71.309965"],[736,"34.001765","71.321638"],[737,"34.003110","71.357783"],[738,"33.998333","71.405013"],[739,"33.995715","71.423280"],[740,"33.997995","71.422930"],[741,"34.001275","71.396188"],[742,"34.002077","71.370338"],[743,"34.004728","71.346205"],[744,"34.003422","71.318403"],[745,"34.005793","71.311547"],[746,"34.008505","71.296532"],[747,"34.018755","71.281930"],[748,"34.023030","71.263470"],[749,"34.037320","71.255207"],[750,"34.060322","71.236553"],[751,"34.066883","71.221803"],[752,"34.079327","71.187422"],[753,"34.089498","71.164577"],[754,"34.103942","71.157928"],[755,"34.105568","71.145303"],[756,"34.106117","71.126590"],[757,"34.113873","71.109413"],[758,"34.122058","71.095953"],[759,"34.113740","71.107098"],[760,"34.119180","71.098787"],[761,"34.121295","71.096623"],[762,"34.119768","71.096545"],[763,"34.112340","71.113072"],[764,"34.106337","71.126898"],[765,"34.106098","71.147140"],[766,"34.099928","71.155975"],[767,"34.096098","71.154802"],[768,"34.086055","71.168988"],[769,"34.074580","71.205393"],[770,"34.059798","71.235033"],[771,"34.049470","71.250550"],[772,"34.038125","71.254638"],[773,"34.022900","71.263773"],[774,"34.014895","71.284327"],[775,"34.008778","71.294957"],[776,"34.006477","71.313397"],[777,"34.003875","71.353572"],[778,"34.001198","71.385583"],[779,"34.000948","71.395305"],[780,"33.997515","71.442150"],[781,"33.998457","71.474030"],[782,"34.010117","71.513323"],[783,"34.004162","71.504217"],[784,"33.999857","71.496402"],[785,"33.999945","71.496713"],[786,"33.999797","71.496617"],[787,"34.008188","71.515540"],[788,"34.005663","71.506787"],[789,"34.008228","71.515413"],[790,"33.999775","71.496382"],[791,"34.008355","71.505628"],[792,"34.009160","71.505645"],[793,"34.004973","71.505620"],[794,"33.999873","71.496575"],[795,"33.999733","71.496365"],[796,"33.999723","71.496580"],[797,"34.000132","71.497213"],[798,"33.997093","71.489683"],[799,"33.998433","71.496860"],[800,"33.987315","71.512497"],[801,"33.970315","71.540172"],[802,"33.960935","71.514197"],[803,"33.965017","71.498798"],[804,"33.964918","71.498102"],[805,"33.963968","71.499285"],[806,"33.973777","71.460180"],[807,"33.977732","71.446198"],[808,"33.997265","71.439712"],[809,"33.998882","71.430403"],[810,"33.997230","71.450437"],[811,"33.998160","71.454225"],[812,"33.996942","71.453022"],[813,"33.975025","71.469208"],[814,"33.967765","71.492792"],[815,"33.965095","71.498850"],[816,"33.967047","71.493883"],[817,"33.965453","71.497278"],[818,"33.960182","71.510608"],[819,"33.963742","71.528137"],[820,"33.974743","71.514762"],[821,"33.997260","71.500913"],[822,"33.999618","71.496442"],[823,"33.991653","71.510517"],[824,"33.964535","71.508153"],[825,"33.964998","71.498792"],[826,"33.964940","71.497640"],[827,"33.969895","71.488832"],[828,"33.963722","71.500245"],[829,"33.975570","71.514750"],[830,"33.995308","71.500843"],[831,"33.998627","71.496877"],[832,"33.998240","71.473128"],[833,"33.998405","71.424823"],[834,"34.000523","71.394848"],[835,"34.001852","71.375760"],[836,"34.005608","71.337255"],[837,"34.004345","71.309373"],[838,"34.006345","71.305353"],[839,"34.018825","71.281913"],[840,"34.030765","71.260008"],[841,"34.041700","71.254093"],[842,"34.051513","71.250312"],[843,"34.059520","71.232003"],[844,"34.075282","71.203113"],[845,"34.085412","71.169953"],[846,"34.104182","71.157982"],[847,"34.102625","71.141443"],[848,"34.104858","71.131235"],[849,"34.112302","71.119187"],[850,"34.113907","71.110537"],[851,"34.116610","71.100925"],[852,"34.118200","71.098052"],[853,"34.113932","71.109255"],[854,"34.119212","71.096712"],[855,"34.113518","71.113343"],[856,"34.105928","71.123907"],[857,"34.101082","71.139358"],[858,"34.103928","71.157967"],[859,"34.104412","71.157465"],[860,"34.094392","71.142392"],[861,"34.100455","71.156082"],[862,"34.103980","71.157977"],[863,"34.103998","71.157998"],[864,"34.100548","71.156147"],[865,"34.100692","71.137018"],[866,"34.104787","71.157288"],[867,"34.104038","71.157948"]]},"895277":{"summary":[["🚚  VEHICLE TRIP REPORT",null],["NLC Smart Solutions — GPS Tracking System",null],[null,null],["VEHICLE INFORMATION",null],["Registration No.","895277"],["IMEI","352592579533142"],["Report Generated At","Jun 17, 2026 8:21:54 AM"],[null,null],["TRIP OVERVIEW",null],["Trip Start Time","Feb 17, 2026 7:51:09 AM"],["Trip End Time","Jun 17, 2026 8:19:30 AM"],["Total Duration","2880 hr 28 min"],["Total Distance (km)","2343.40 km"],["Start Location (Lat, Lon)","33.971482, 71.455597"],["End Location (Lat, Lon)","33.998685, 71.496502"],["Total GPS Points","54245"],["Moving Points","3728"],["Idle / Stop Count","413"],["Route via OSRM","No (raw GPS)"]],"idle":[["🛑  IDLE & STOP POINTS DETAIL",null,null,null,null,null,null],["Vehicle: 895277   |   IMEI: 352592579533142   |   Total Stops: 413",null,null,null,null,null,null],[null,null,null,null,null,null,null],["Stop #","Latitude","Longitude","Stop Date","Arrived At","Departed At","Duration"],[1,"33.971482","71.455597","Feb 17, 2026","Feb 17, 2026 7:51:09 AM","Feb 17, 2026 9:44:10 AM","1 hr 53 min"],[2,"33.998422","71.496682","Feb 17, 2026","Feb 17, 2026 10:06:14 AM","Feb 17, 2026 3:01:27 PM","4 hr 55 min"],[3,"33.974142","71.461818","Feb 17, 2026","Feb 17, 2026 3:34:29 PM","Feb 17, 2026 3:35:43 PM","1 min"],[4,"33.970197","71.488542","Feb 17, 2026","Feb 17, 2026 3:42:42 PM","Feb 17, 2026 4:31:52 PM","49 min"],[5,"33.998590","71.455408","Feb 17, 2026","Feb 17, 2026 4:56:19 PM","Feb 17, 2026 5:00:46 PM","4 min"],[6,"33.998820","71.453932","Feb 17, 2026","Feb 17, 2026 5:04:52 PM","Feb 17, 2026 5:06:41 PM","2 min"],[7,"33.969725","71.455980","Feb 17, 2026","Feb 17, 2026 5:37:17 PM","Feb 17, 2026 7:10:37 PM","1 hr 33 min"],[8,"33.993570","71.478980","Feb 17, 2026","Feb 17, 2026 7:36:08 PM","Feb 17, 2026 10:16:03 PM","2 hr 40 min"],[9,"33.997463","71.490393","Feb 17, 2026","Feb 17, 2026 10:31:46 PM","Feb 17, 2026 10:39:43 PM","8 min"],[10,"33.971200","71.455752","Feb 17, 2026","Feb 17, 2026 11:04:32 PM","Feb 18, 2026 8:00:56 AM","8 hr 56 min"],[11,"33.969713","71.455972","Feb 18, 2026","Feb 18, 2026 8:05:44 AM","Feb 18, 2026 8:15:27 AM","10 min"],[12,"34.005725","71.379588","Feb 18, 2026","Feb 18, 2026 8:37:25 AM","Feb 18, 2026 8:38:55 AM","2 min"],[13,"34.104202","71.157795","Feb 18, 2026","Feb 18, 2026 9:25:49 AM","Feb 18, 2026 9:53:42 AM","28 min"],[14,"34.122090","71.095915","Feb 18, 2026","Feb 18, 2026 10:12:41 AM","Feb 20, 2026 10:09:05 AM","47 hr 56 min"],[15,"34.122078","71.095890","Feb 20, 2026","Feb 20, 2026 10:36:14 AM","Feb 20, 2026 11:13:56 AM","38 min"],[16,"34.118045","71.097763","Feb 20, 2026","Feb 20, 2026 11:17:49 AM","Feb 20, 2026 11:28:43 AM","11 min"],[17,"34.121990","71.095887","Feb 20, 2026","Feb 20, 2026 11:34:40 AM","Feb 20, 2026 3:16:59 PM","3 hr 42 min"],[18,"34.103812","71.158405","Feb 20, 2026","Feb 20, 2026 3:38:54 PM","Feb 21, 2026 9:58:15 AM","18 hr 19 min"],[19,"34.114968","71.106758","Feb 21, 2026","Feb 21, 2026 10:21:09 AM","Feb 21, 2026 10:41:05 AM","20 min"],[20,"34.122028","71.096018","Feb 21, 2026","Feb 21, 2026 10:47:26 AM","Feb 21, 2026 4:00:12 PM","5 hr 13 min"],[21,"33.969740","71.456008","Feb 21, 2026","Feb 21, 2026 5:46:12 PM","Feb 21, 2026 8:06:01 PM","2 hr 20 min"],[22,"33.974350","71.467617","Feb 21, 2026","Feb 21, 2026 8:17:08 PM","Feb 21, 2026 8:42:00 PM","25 min"],[23,"33.971450","71.455655","Feb 21, 2026","Feb 21, 2026 9:10:25 PM","Feb 23, 2026 8:15:54 AM","35 hr 5 min"],[24,"33.998912","71.496772","Feb 23, 2026","Feb 23, 2026 8:46:48 AM","Feb 23, 2026 12:19:58 PM","3 hr 33 min"],[25,"33.999482","71.496568","Feb 23, 2026","Feb 23, 2026 12:56:26 PM","Feb 23, 2026 2:55:13 PM","1 hr 59 min"],[26,"33.969702","71.456158","Feb 23, 2026","Feb 23, 2026 3:20:24 PM","Feb 23, 2026 7:27:00 PM","4 hr 7 min"],[27,"33.969703","71.456037","Feb 23, 2026","Feb 23, 2026 7:38:36 PM","Feb 23, 2026 8:16:36 PM","38 min"],[28,"33.997917","71.468862","Feb 23, 2026","Feb 23, 2026 8:30:55 PM","Feb 23, 2026 8:47:25 PM","17 min"],[29,"33.969792","71.456180","Feb 23, 2026","Feb 23, 2026 9:08:41 PM","Feb 24, 2026 8:15:13 AM","11 hr 7 min"],[30,"33.998463","71.496783","Feb 24, 2026","Feb 24, 2026 8:40:02 AM","Feb 24, 2026 3:14:16 PM","6 hr 34 min"],[31,"33.970300","71.488330","Feb 24, 2026","Feb 24, 2026 3:34:52 PM","Feb 24, 2026 4:27:37 PM","53 min"],[32,"33.973678","71.463823","Feb 24, 2026","Feb 24, 2026 4:38:11 PM","Feb 24, 2026 5:06:47 PM","29 min"],[33,"33.971488","71.455643","Feb 24, 2026","Feb 24, 2026 5:13:50 PM","Feb 25, 2026 7:28:47 AM","14 hr 15 min"],[34,"33.997303","71.449063","Feb 25, 2026","Feb 25, 2026 7:38:15 AM","Feb 25, 2026 7:42:01 AM","4 min"],[35,"34.016890","71.553723","Feb 25, 2026","Feb 25, 2026 8:06:02 AM","Feb 25, 2026 8:07:13 AM","1 min"],[36,"34.018135","71.555670","Feb 25, 2026","Feb 25, 2026 8:11:14 AM","Feb 25, 2026 8:12:22 AM","1 min"],[37,"33.998430","71.496677","Feb 25, 2026","Feb 25, 2026 8:33:39 AM","Feb 25, 2026 4:09:51 PM","7 hr 36 min"],[38,"33.973525","71.457845","Feb 25, 2026","Feb 25, 2026 4:38:29 PM","Feb 25, 2026 4:40:52 PM","2 min"],[39,"33.971427","71.455667","Feb 25, 2026","Feb 25, 2026 4:46:23 PM","Feb 26, 2026 9:10:01 AM","16 hr 24 min"],[40,"34.103977","71.158003","Feb 26, 2026","Feb 26, 2026 10:08:27 AM","Feb 26, 2026 10:13:51 AM","5 min"],[41,"34.122053","71.095993","Feb 26, 2026","Feb 26, 2026 10:31:02 AM","Feb 26, 2026 5:24:18 PM","6 hr 53 min"],[42,"34.095413","71.140695","Feb 26, 2026","Feb 26, 2026 5:52:30 PM","Feb 26, 2026 6:44:38 PM","52 min"],[43,"34.103798","71.158393","Feb 26, 2026","Feb 26, 2026 6:52:33 PM","Feb 26, 2026 11:30:30 PM","4 hr 38 min"],[44,"33.969630","71.456000","Feb 27, 2026","Feb 27, 2026 12:50:53 AM","Mar 9, 2026 12:28:19 PM","251 hr 37 min"],[45,"33.998607","71.496535","Mar 09, 2026","Mar 9, 2026 12:47:30 PM","Mar 9, 2026 3:29:32 PM","2 hr 42 min"],[46,"34.006382","71.507628","Mar 09, 2026","Mar 9, 2026 3:38:42 PM","Mar 9, 2026 3:45:35 PM","7 min"],[47,"33.971535","71.455605","Mar 09, 2026","Mar 9, 2026 4:27:48 PM","Mar 10, 2026 9:00:24 AM","16 hr 33 min"],[48,"33.998553","71.496678","Mar 10, 2026","Mar 10, 2026 9:22:26 AM","Mar 10, 2026 2:33:51 PM","5 hr 11 min"],[49,"33.998015","71.496662","Mar 10, 2026","Mar 10, 2026 2:46:02 PM","Mar 10, 2026 3:05:14 PM","19 min"],[50,"33.997547","71.468658","Mar 10, 2026","Mar 10, 2026 3:16:58 PM","Mar 10, 2026 3:25:47 PM","9 min"],[51,"33.969733","71.456020","Mar 10, 2026","Mar 10, 2026 3:46:09 PM","Mar 10, 2026 4:33:03 PM","47 min"],[52,"33.970273","71.488477","Mar 10, 2026","Mar 10, 2026 4:42:52 PM","Mar 10, 2026 5:18:01 PM","35 min"],[53,"33.971468","71.455583","Mar 10, 2026","Mar 10, 2026 5:28:13 PM","Mar 11, 2026 8:58:14 AM","15 hr 30 min"],[54,"33.993513","71.478787","Mar 11, 2026","Mar 11, 2026 9:13:08 AM","Mar 11, 2026 9:14:18 AM","1 min"],[55,"33.999503","71.496550","Mar 11, 2026","Mar 11, 2026 9:23:21 AM","Mar 11, 2026 3:01:28 PM","5 hr 38 min"],[56,"33.990337","71.561443","Mar 11, 2026","Mar 11, 2026 3:32:24 PM","Mar 11, 2026 3:36:54 PM","5 min"],[57,"33.971527","71.455597","Mar 11, 2026","Mar 11, 2026 4:04:16 PM","Mar 12, 2026 9:19:15 AM","17 hr 15 min"],[58,"33.982495","71.457325","Mar 12, 2026","Mar 12, 2026 9:29:52 AM","Mar 12, 2026 9:52:02 AM","22 min"],[59,"33.971503","71.455605","Mar 12, 2026","Mar 12, 2026 10:03:54 AM","Mar 16, 2026 8:24:25 AM","94 hr 21 min"],[60,"33.998237","71.496788","Mar 16, 2026","Mar 16, 2026 8:43:55 AM","Mar 17, 2026 2:26:34 PM","29 hr 43 min"],[61,"33.982820","71.457960","Mar 17, 2026","Mar 17, 2026 2:41:04 PM","Mar 17, 2026 2:53:09 PM","12 min"],[62,"33.971543","71.455610","Mar 17, 2026","Mar 17, 2026 3:07:29 PM","Mar 18, 2026 8:29:16 AM","17 hr 22 min"],[63,"33.998600","71.496635","Mar 18, 2026","Mar 18, 2026 8:48:17 AM","Mar 19, 2026 5:32:39 PM","32 hr 44 min"],[64,"34.491638","71.706182","Mar 19, 2026","Mar 19, 2026 5:47:47 PM","Mar 19, 2026 5:51:09 PM","3 min"],[65,"34.495547","71.726627","Mar 19, 2026","Mar 19, 2026 6:02:02 PM","Mar 19, 2026 7:50:16 PM","1 hr 48 min"],[66,"34.489533","71.797400","Mar 19, 2026","Mar 19, 2026 8:11:08 PM","Mar 19, 2026 8:16:37 PM","5 min"],[67,"34.501827","71.898375","Mar 19, 2026","Mar 19, 2026 8:48:11 PM","Mar 19, 2026 9:25:45 PM","38 min"],[68,"34.509490","71.898418","Mar 19, 2026","Mar 19, 2026 9:43:03 PM","Mar 19, 2026 10:51:15 PM","1 hr 8 min"],[69,"34.493867","71.837483","Mar 19, 2026","Mar 19, 2026 11:05:11 PM","Mar 19, 2026 11:06:27 PM","1 min"],[70,"34.497563","71.725582","Mar 19, 2026","Mar 19, 2026 11:36:02 PM","Mar 21, 2026 6:16:04 AM","30 hr 40 min"],[71,"34.495265","71.739760","Mar 21, 2026","Mar 21, 2026 6:20:49 AM","Mar 21, 2026 6:39:04 AM","18 min"],[72,"34.495492","71.726572","Mar 21, 2026","Mar 21, 2026 6:44:09 AM","Mar 21, 2026 10:55:57 AM","4 hr 12 min"],[73,"34.495197","71.718290","Mar 21, 2026","Mar 21, 2026 11:02:18 AM","Mar 21, 2026 11:37:22 AM","35 min"],[74,"34.495608","71.720978","Mar 21, 2026","Mar 21, 2026 11:48:45 AM","Mar 21, 2026 12:16:43 PM","28 min"],[75,"34.497618","71.725582","Mar 21, 2026","Mar 21, 2026 12:27:51 PM","Mar 21, 2026 3:35:04 PM","3 hr 7 min"],[76,"34.502415","71.898012","Mar 21, 2026","Mar 21, 2026 4:19:29 PM","Mar 21, 2026 4:25:57 PM","6 min"],[77,"34.477437","71.910403","Mar 21, 2026","Mar 21, 2026 4:31:42 PM","Mar 21, 2026 4:33:57 PM","2 min"],[78,"34.493790","71.837757","Mar 21, 2026","Mar 21, 2026 4:59:38 PM","Mar 21, 2026 5:32:17 PM","33 min"],[79,"34.496048","71.726455","Mar 21, 2026","Mar 21, 2026 6:03:25 PM","Mar 22, 2026 2:48:14 PM","20 hr 45 min"],[80,"34.495215","71.711045","Mar 22, 2026","Mar 22, 2026 3:00:35 PM","Mar 22, 2026 4:19:51 PM","1 hr 19 min"],[81,"34.494432","71.718123","Mar 22, 2026","Mar 22, 2026 4:25:06 PM","Mar 22, 2026 6:08:21 PM","1 hr 43 min"],[82,"34.497603","71.725595","Mar 22, 2026","Mar 22, 2026 6:16:58 PM","Mar 23, 2026 2:23:36 PM","20 hr 7 min"],[83,"34.502377","71.898020","Mar 23, 2026","Mar 23, 2026 3:07:16 PM","Mar 23, 2026 3:17:40 PM","10 min"],[84,"34.400130","71.910938","Mar 23, 2026","Mar 23, 2026 3:42:38 PM","Mar 23, 2026 4:45:34 PM","1 hr 3 min"],[85,"34.285462","71.904443","Mar 23, 2026","Mar 23, 2026 5:09:39 PM","Mar 23, 2026 5:10:56 PM","1 min"],[86,"34.285705","71.898793","Mar 23, 2026","Mar 23, 2026 5:14:40 PM","Mar 23, 2026 5:16:37 PM","2 min"],[87,"34.154678","71.774593","Mar 23, 2026","Mar 23, 2026 5:47:45 PM","Mar 23, 2026 5:57:12 PM","9 min"],[88,"33.974993","71.474543","Mar 23, 2026","Mar 23, 2026 7:00:05 PM","Mar 23, 2026 7:45:16 PM","45 min"],[89,"33.969728","71.456070","Mar 23, 2026","Mar 23, 2026 8:00:59 PM","Mar 23, 2026 8:08:12 PM","7 min"],[90,"33.971448","71.455693","Mar 23, 2026","Mar 23, 2026 8:12:11 PM","Mar 24, 2026 9:34:46 AM","13 hr 23 min"],[91,"33.998447","71.496683","Mar 24, 2026","Mar 24, 2026 9:53:03 AM","Mar 24, 2026 3:21:15 PM","5 hr 28 min"],[92,"33.997353","71.466798","Mar 24, 2026","Mar 24, 2026 3:28:20 PM","Mar 24, 2026 3:32:29 PM","4 min"],[93,"33.969738","71.456062","Mar 24, 2026","Mar 24, 2026 3:47:29 PM","Mar 24, 2026 4:30:15 PM","43 min"],[94,"33.971360","71.455703","Mar 24, 2026","Mar 24, 2026 4:36:54 PM","Mar 27, 2026 1:21:38 PM","68 hr 45 min"],[95,"33.971517","71.455637","Mar 27, 2026","Mar 27, 2026 2:07:05 PM","Mar 28, 2026 9:43:49 AM","19 hr 37 min"],[96,"33.969770","71.456060","Mar 28, 2026","Mar 28, 2026 9:52:44 AM","Mar 28, 2026 11:10:46 AM","1 hr 18 min"],[97,"33.998658","71.455402","Mar 28, 2026","Mar 28, 2026 11:26:16 AM","Mar 28, 2026 11:31:44 AM","5 min"],[98,"34.005755","71.379687","Mar 28, 2026","Mar 28, 2026 12:01:23 PM","Mar 28, 2026 12:13:40 PM","12 min"],[99,"33.998745","71.427587","Mar 28, 2026","Mar 28, 2026 12:39:30 PM","Mar 28, 2026 2:21:17 PM","1 hr 42 min"],[100,"33.974018","71.457758","Mar 28, 2026","Mar 28, 2026 2:35:55 PM","Mar 28, 2026 3:05:30 PM","30 min"],[101,"33.975393","71.470665","Mar 28, 2026","Mar 28, 2026 3:09:28 PM","Mar 28, 2026 3:15:56 PM","6 min"],[102,"33.970202","71.488490","Mar 28, 2026","Mar 28, 2026 3:21:31 PM","Mar 28, 2026 4:14:42 PM","53 min"],[103,"33.969703","71.456025","Mar 28, 2026","Mar 28, 2026 4:29:38 PM","Mar 28, 2026 5:24:22 PM","55 min"],[104,"33.973965","71.473197","Mar 28, 2026","Mar 28, 2026 5:59:49 PM","Mar 28, 2026 7:48:55 PM","1 hr 49 min"],[105,"33.969693","71.456073","Mar 28, 2026","Mar 28, 2026 7:58:26 PM","Mar 28, 2026 8:27:23 PM","29 min"],[106,"33.971378","71.455715","Mar 28, 2026","Mar 28, 2026 8:30:43 PM","Mar 29, 2026 2:13:25 PM","17 hr 43 min"],[107,"33.969695","71.456053","Mar 29, 2026","Mar 29, 2026 2:17:30 PM","Mar 29, 2026 2:38:32 PM","21 min"],[108,"34.015828","71.599208","Mar 29, 2026","Mar 29, 2026 3:15:43 PM","Mar 29, 2026 3:19:28 PM","4 min"],[109,"33.995823","71.462065","Mar 29, 2026","Mar 29, 2026 3:49:31 PM","Mar 29, 2026 4:50:05 PM","1 hr 1 min"],[110,"34.103893","71.158082","Mar 29, 2026","Mar 29, 2026 5:55:22 PM","Mar 30, 2026 9:43:19 AM","15 hr 48 min"],[111,"34.121943","71.095922","Mar 30, 2026","Mar 30, 2026 10:13:06 AM","Mar 30, 2026 10:20:53 AM","8 min"],[112,"34.103910","71.158060","Mar 30, 2026","Mar 30, 2026 10:49:14 AM","Mar 30, 2026 11:45:58 AM","57 min"],[113,"34.000210","71.387817","Mar 30, 2026","Mar 30, 2026 12:28:37 PM","Mar 30, 2026 12:30:05 PM","1 min"],[114,"33.969742","71.456217","Mar 30, 2026","Mar 30, 2026 12:58:56 PM","Mar 30, 2026 1:06:00 PM","7 min"],[115,"33.971518","71.455638","Mar 30, 2026","Mar 30, 2026 1:09:08 PM","Mar 31, 2026 9:49:42 AM","20 hr 41 min"],[116,"33.995838","71.494138","Mar 31, 2026","Mar 31, 2026 10:07:27 AM","Mar 31, 2026 10:09:41 AM","2 min"],[117,"33.999467","71.496672","Mar 31, 2026","Mar 31, 2026 10:18:40 AM","Mar 31, 2026 1:42:27 PM","3 hr 24 min"],[118,"34.008130","71.518318","Mar 31, 2026","Mar 31, 2026 2:14:17 PM","Mar 31, 2026 2:20:34 PM","6 min"],[119,"33.975438","71.470645","Mar 31, 2026","Mar 31, 2026 2:42:14 PM","Mar 31, 2026 2:46:13 PM","4 min"],[120,"33.970233","71.488477","Mar 31, 2026","Mar 31, 2026 2:50:14 PM","Mar 31, 2026 3:35:26 PM","45 min"],[121,"33.971602","71.483207","Mar 31, 2026","Mar 31, 2026 3:44:16 PM","Mar 31, 2026 4:14:11 PM","30 min"],[122,"33.973505","71.458285","Mar 31, 2026","Mar 31, 2026 4:28:03 PM","Mar 31, 2026 4:31:58 PM","4 min"],[123,"33.969668","71.456015","Mar 31, 2026","Mar 31, 2026 4:35:45 PM","Mar 31, 2026 5:36:36 PM","1 hr 1 min"],[124,"33.971515","71.483285","Mar 31, 2026","Mar 31, 2026 5:49:25 PM","Mar 31, 2026 5:59:05 PM","10 min"],[125,"33.973015","71.479710","Mar 31, 2026","Mar 31, 2026 6:05:52 PM","Mar 31, 2026 6:07:00 PM","1 min"],[126,"33.969878","71.456157","Mar 31, 2026","Mar 31, 2026 6:14:13 PM","Apr 1, 2026 7:56:02 AM","13 hr 42 min"],[127,"33.971108","71.455680","Apr 01, 2026","Apr 1, 2026 8:02:15 AM","Apr 1, 2026 8:04:08 AM","2 min"],[128,"33.972797","71.460375","Apr 01, 2026","Apr 1, 2026 8:28:57 AM","Apr 1, 2026 8:33:40 AM","5 min"],[129,"33.998417","71.496675","Apr 01, 2026","Apr 1, 2026 8:54:22 AM","Apr 1, 2026 4:32:59 PM","7 hr 39 min"],[130,"33.999563","71.495803","Apr 01, 2026","Apr 1, 2026 5:15:23 PM","Apr 2, 2026 2:14:06 PM","20 hr 59 min"],[131,"33.994510","71.506043","Apr 02, 2026","Apr 2, 2026 2:23:59 PM","Apr 2, 2026 3:02:13 PM","38 min"],[132,"33.998755","71.493927","Apr 02, 2026","Apr 2, 2026 3:16:19 PM","Apr 2, 2026 3:40:14 PM","24 min"],[133,"33.997488","71.491205","Apr 02, 2026","Apr 2, 2026 3:41:45 PM","Apr 2, 2026 3:49:10 PM","7 min"],[134,"33.999877","71.541915","Apr 02, 2026","Apr 2, 2026 4:45:44 PM","Apr 2, 2026 4:53:26 PM","8 min"],[135,"33.998565","71.539795","Apr 02, 2026","Apr 2, 2026 5:05:17 PM","Apr 2, 2026 5:07:18 PM","2 min"],[136,"33.994693","71.507212","Apr 02, 2026","Apr 2, 2026 5:34:38 PM","Apr 2, 2026 5:38:35 PM","4 min"],[137,"33.994463","71.506128","Apr 02, 2026","Apr 2, 2026 5:45:11 PM","Apr 3, 2026 8:25:21 AM","14 hr 40 min"],[138,"34.039723","71.527228","Apr 03, 2026","Apr 3, 2026 8:52:14 AM","Apr 3, 2026 11:10:36 AM","2 hr 18 min"],[139,"34.039718","71.527185","Apr 03, 2026","Apr 3, 2026 11:22:33 AM","Apr 3, 2026 11:30:42 AM","8 min"],[140,"34.039820","71.527140","Apr 03, 2026","Apr 3, 2026 11:42:31 AM","Apr 3, 2026 12:16:47 PM","34 min"],[141,"33.998517","71.495230","Apr 03, 2026","Apr 3, 2026 12:47:04 PM","Apr 3, 2026 12:49:03 PM","2 min"],[142,"33.999687","71.496087","Apr 03, 2026","Apr 3, 2026 12:53:15 PM","Apr 3, 2026 1:37:03 PM","44 min"],[143,"33.994513","71.506083","Apr 03, 2026","Apr 3, 2026 1:51:48 PM","Apr 4, 2026 12:11:45 PM","22 hr 20 min"],[144,"34.003898","71.483978","Apr 04, 2026","Apr 4, 2026 12:50:06 PM","Apr 4, 2026 2:09:51 PM","1 hr 20 min"],[145,"34.004720","71.504975","Apr 04, 2026","Apr 4, 2026 2:19:47 PM","Apr 4, 2026 2:23:03 PM","3 min"],[146,"33.974500","71.514940","Apr 04, 2026","Apr 4, 2026 2:33:25 PM","Apr 4, 2026 2:36:45 PM","3 min"],[147,"33.994620","71.505945","Apr 04, 2026","Apr 4, 2026 2:44:14 PM","Apr 5, 2026 2:24:24 PM","23 hr 40 min"],[148,"33.994598","71.506065","Apr 05, 2026","Apr 5, 2026 2:54:31 PM","Apr 5, 2026 11:03:05 PM","8 hr 9 min"],[149,"33.997950","71.538788","Apr 05, 2026","Apr 5, 2026 11:24:13 PM","Apr 5, 2026 11:47:30 PM","23 min"],[150,"33.994570","71.506070","Apr 06, 2026","Apr 6, 2026 12:13:06 AM","Apr 6, 2026 7:21:37 AM","7 hr 9 min"],[151,"33.994467","71.506065","Apr 06, 2026","Apr 6, 2026 7:44:07 AM","Apr 6, 2026 8:04:05 AM","20 min"],[152,"34.039688","71.527132","Apr 06, 2026","Apr 6, 2026 8:31:29 AM","Apr 6, 2026 8:50:32 AM","19 min"],[153,"34.010122","71.539588","Apr 06, 2026","Apr 6, 2026 9:06:02 AM","Apr 6, 2026 9:07:25 AM","1 min"],[154,"33.999498","71.495755","Apr 06, 2026","Apr 6, 2026 9:23:08 AM","Apr 6, 2026 10:19:34 AM","56 min"],[155,"34.039408","71.527460","Apr 06, 2026","Apr 6, 2026 10:57:13 AM","Apr 6, 2026 11:15:03 AM","18 min"],[156,"33.994567","71.506118","Apr 06, 2026","Apr 6, 2026 11:55:48 AM","Apr 6, 2026 2:29:42 PM","2 hr 34 min"],[157,"33.994525","71.506125","Apr 06, 2026","Apr 6, 2026 2:38:55 PM","Apr 6, 2026 3:52:21 PM","1 hr 13 min"],[158,"33.996295","71.463100","Apr 06, 2026","Apr 6, 2026 4:26:50 PM","Apr 6, 2026 4:57:35 PM","31 min"],[159,"33.994580","71.506110","Apr 06, 2026","Apr 6, 2026 5:23:35 PM","Apr 8, 2026 7:08:30 AM","37 hr 45 min"],[160,"33.995770","71.488925","Apr 08, 2026","Apr 8, 2026 7:18:15 AM","Apr 8, 2026 7:29:49 AM","12 min"],[161,"33.994563","71.506038","Apr 08, 2026","Apr 8, 2026 7:43:20 AM","Apr 8, 2026 8:05:38 AM","22 min"],[162,"33.994562","71.506072","Apr 08, 2026","Apr 8, 2026 9:05:10 AM","Apr 8, 2026 11:13:52 AM","2 hr 9 min"],[163,"34.039753","71.527215","Apr 08, 2026","Apr 8, 2026 11:53:25 AM","Apr 8, 2026 12:18:51 PM","25 min"],[164,"33.998492","71.495210","Apr 08, 2026","Apr 8, 2026 12:49:41 PM","Apr 8, 2026 1:00:41 PM","11 min"],[165,"33.994505","71.505995","Apr 08, 2026","Apr 8, 2026 1:09:47 PM","Apr 8, 2026 2:18:09 PM","1 hr 8 min"],[166,"33.994570","71.506052","Apr 08, 2026","Apr 8, 2026 2:42:35 PM","Apr 9, 2026 7:14:04 AM","16 hr 31 min"],[167,"33.998923","71.496758","Apr 09, 2026","Apr 9, 2026 7:32:32 AM","Apr 9, 2026 7:33:47 AM","1 min"],[168,"33.998370","71.495198","Apr 09, 2026","Apr 9, 2026 7:50:03 AM","Apr 9, 2026 1:22:19 PM","5 hr 32 min"],[169,"33.994515","71.506200","Apr 09, 2026","Apr 9, 2026 1:30:46 PM","Apr 9, 2026 2:02:32 PM","32 min"],[170,"33.997502","71.492773","Apr 09, 2026","Apr 9, 2026 2:14:02 PM","Apr 9, 2026 2:19:09 PM","5 min"],[171,"33.994635","71.506092","Apr 09, 2026","Apr 9, 2026 2:43:56 PM","Apr 9, 2026 3:07:17 PM","23 min"],[172,"33.999570","71.495918","Apr 09, 2026","Apr 9, 2026 3:21:07 PM","Apr 9, 2026 3:34:06 PM","13 min"],[173,"33.997493","71.492733","Apr 09, 2026","Apr 9, 2026 3:46:13 PM","Apr 9, 2026 3:50:17 PM","4 min"],[174,"33.996497","71.463160","Apr 09, 2026","Apr 9, 2026 3:58:38 PM","Apr 9, 2026 4:21:11 PM","23 min"],[175,"34.001783","71.481895","Apr 09, 2026","Apr 9, 2026 4:36:12 PM","Apr 9, 2026 4:45:18 PM","9 min"],[176,"33.997475","71.492707","Apr 09, 2026","Apr 9, 2026 4:59:37 PM","Apr 9, 2026 5:06:03 PM","6 min"],[177,"33.994518","71.506177","Apr 10, 2026","Apr 10, 2026 4:38:53 PM","Apr 11, 2026 8:33:42 PM","27 hr 55 min"],[178,"34.017848","71.548065","Apr 11, 2026","Apr 11, 2026 8:56:03 PM","Apr 11, 2026 9:45:51 PM","50 min"],[179,"33.994463","71.506040","Apr 11, 2026","Apr 11, 2026 10:04:26 PM","Apr 12, 2026 7:35:36 PM","21 hr 31 min"],[180,"34.004745","71.505023","Apr 12, 2026","Apr 12, 2026 7:56:56 PM","Apr 12, 2026 7:58:05 PM","1 min"],[181,"34.032692","71.608962","Apr 12, 2026","Apr 12, 2026 8:39:27 PM","Apr 12, 2026 9:29:51 PM","50 min"],[182,"33.994503","71.506057","Apr 12, 2026","Apr 12, 2026 9:57:56 PM","Apr 13, 2026 7:15:34 AM","9 hr 18 min"],[183,"33.994510","71.506092","Apr 13, 2026","Apr 13, 2026 7:27:58 AM","Apr 13, 2026 7:59:41 AM","32 min"],[184,"33.999650","71.496043","Apr 13, 2026","Apr 13, 2026 9:11:18 AM","Apr 13, 2026 9:15:13 AM","4 min"],[185,"33.994572","71.506120","Apr 13, 2026","Apr 13, 2026 1:02:41 PM","Apr 13, 2026 1:54:21 PM","52 min"],[186,"33.995700","71.490695","Apr 13, 2026","Apr 13, 2026 2:02:06 PM","Apr 13, 2026 2:15:00 PM","13 min"],[187,"33.994682","71.505937","Apr 13, 2026","Apr 13, 2026 2:33:00 PM","Apr 13, 2026 2:44:41 PM","12 min"],[188,"33.998500","71.495200","Apr 13, 2026","Apr 13, 2026 2:54:11 PM","Apr 13, 2026 2:58:38 PM","4 min"],[189,"33.998817","71.453987","Apr 13, 2026","Apr 13, 2026 4:47:20 PM","Apr 13, 2026 5:06:04 PM","19 min"],[190,"34.007532","71.524938","Apr 13, 2026","Apr 13, 2026 5:25:05 PM","Apr 13, 2026 5:47:55 PM","23 min"],[191,"34.011390","71.538313","Apr 13, 2026","Apr 13, 2026 6:00:09 PM","Apr 13, 2026 6:01:16 PM","1 min"],[192,"33.999660","71.496120","Apr 13, 2026","Apr 13, 2026 6:22:13 PM","Apr 13, 2026 6:44:01 PM","22 min"],[193,"33.994475","71.506140","Apr 13, 2026","Apr 13, 2026 6:52:35 PM","Apr 14, 2026 7:16:42 AM","12 hr 24 min"],[194,"33.994490","71.506132","Apr 14, 2026","Apr 14, 2026 7:33:20 AM","Apr 14, 2026 8:47:24 AM","1 hr 14 min"],[195,"33.998323","71.495210","Apr 14, 2026","Apr 14, 2026 9:21:03 AM","Apr 14, 2026 11:10:53 AM","1 hr 50 min"],[196,"34.004480","71.483383","Apr 14, 2026","Apr 14, 2026 11:37:56 AM","Apr 14, 2026 11:40:56 AM","3 min"],[197,"33.999503","71.494587","Apr 14, 2026","Apr 14, 2026 12:04:19 PM","Apr 14, 2026 12:05:19 PM","1 min"],[198,"33.995367","71.503087","Apr 14, 2026","Apr 14, 2026 12:16:24 PM","Apr 14, 2026 12:21:28 PM","5 min"],[199,"33.998307","71.495162","Apr 14, 2026","Apr 14, 2026 12:38:36 PM","Apr 14, 2026 1:27:22 PM","49 min"],[200,"34.004540","71.483407","Apr 14, 2026","Apr 14, 2026 1:48:19 PM","Apr 14, 2026 1:50:19 PM","2 min"],[201,"33.995778","71.488863","Apr 14, 2026","Apr 14, 2026 2:22:22 PM","Apr 14, 2026 2:25:23 PM","3 min"],[202,"33.994573","71.506117","Apr 14, 2026","Apr 14, 2026 2:38:53 PM","Apr 15, 2026 7:15:51 AM","16 hr 37 min"],[203,"33.994580","71.506048","Apr 15, 2026","Apr 15, 2026 7:32:17 AM","Apr 15, 2026 8:17:50 AM","46 min"],[204,"33.994557","71.505980","Apr 15, 2026","Apr 15, 2026 9:08:32 AM","Apr 15, 2026 9:33:14 AM","25 min"],[205,"34.003948","71.483958","Apr 15, 2026","Apr 15, 2026 9:43:53 AM","Apr 15, 2026 10:11:08 AM","27 min"],[206,"33.998100","71.492812","Apr 15, 2026","Apr 15, 2026 10:21:07 AM","Apr 15, 2026 10:25:48 AM","5 min"],[207,"33.999437","71.495773","Apr 15, 2026","Apr 15, 2026 10:30:51 AM","Apr 15, 2026 11:33:45 AM","1 hr 3 min"],[208,"33.994603","71.506108","Apr 15, 2026","Apr 15, 2026 1:28:49 PM","Apr 15, 2026 1:52:21 PM","24 min"],[209,"33.997915","71.494355","Apr 15, 2026","Apr 15, 2026 2:03:48 PM","Apr 15, 2026 2:27:23 PM","24 min"],[210,"33.998403","71.495265","Apr 15, 2026","Apr 15, 2026 2:43:15 PM","Apr 15, 2026 4:18:27 PM","1 hr 35 min"],[211,"33.998322","71.495173","Apr 15, 2026","Apr 15, 2026 4:53:16 PM","Apr 15, 2026 5:53:42 PM","1 hr"],[212,"33.994420","71.506102","Apr 15, 2026","Apr 15, 2026 6:01:31 PM","Apr 15, 2026 6:24:16 PM","23 min"],[213,"33.996380","71.463172","Apr 15, 2026","Apr 15, 2026 6:41:11 PM","Apr 15, 2026 7:58:41 PM","1 hr 18 min"],[214,"33.994522","71.506238","Apr 15, 2026","Apr 15, 2026 8:19:28 PM","Apr 16, 2026 8:31:51 AM","12 hr 12 min"],[215,"33.998320","71.495208","Apr 16, 2026","Apr 16, 2026 9:01:03 AM","Apr 16, 2026 9:54:18 AM","53 min"],[216,"33.987603","71.476695","Apr 16, 2026","Apr 16, 2026 10:12:15 AM","Apr 16, 2026 10:50:12 AM","38 min"],[217,"33.998322","71.495220","Apr 16, 2026","Apr 16, 2026 11:12:39 AM","Apr 16, 2026 12:41:38 PM","1 hr 29 min"],[218,"33.994533","71.506015","Apr 16, 2026","Apr 16, 2026 1:11:02 PM","Apr 16, 2026 1:41:17 PM","30 min"],[219,"33.997452","71.492263","Apr 16, 2026","Apr 16, 2026 1:49:40 PM","Apr 16, 2026 1:51:09 PM","1 min"],[220,"33.994517","71.506007","Apr 16, 2026","Apr 16, 2026 1:57:55 PM","Apr 17, 2026 8:07:18 AM","18 hr 9 min"],[221,"34.039825","71.527030","Apr 17, 2026","Apr 17, 2026 8:46:31 AM","Apr 17, 2026 10:13:01 AM","1 hr 27 min"],[222,"34.041205","71.525758","Apr 17, 2026","Apr 17, 2026 10:22:35 AM","Apr 17, 2026 11:11:28 AM","49 min"],[223,"33.994832","71.506193","Apr 17, 2026","Apr 17, 2026 11:43:38 AM","Apr 17, 2026 12:29:54 PM","46 min"],[224,"33.998300","71.495210","Apr 17, 2026","Apr 17, 2026 12:38:53 PM","Apr 17, 2026 2:26:30 PM","1 hr 48 min"],[225,"33.994508","71.506085","Apr 17, 2026","Apr 17, 2026 2:32:00 PM","Apr 20, 2026 7:18:26 AM","64 hr 46 min"],[226,"33.994572","71.506058","Apr 20, 2026","Apr 20, 2026 7:37:56 AM","Apr 20, 2026 8:27:04 AM","49 min"],[227,"33.998290","71.495170","Apr 20, 2026","Apr 20, 2026 9:14:29 AM","Apr 20, 2026 9:39:03 AM","25 min"],[228,"33.987580","71.476628","Apr 20, 2026","Apr 20, 2026 9:55:22 AM","Apr 20, 2026 10:22:00 AM","27 min"],[229,"33.994587","71.506077","Apr 20, 2026","Apr 20, 2026 1:13:10 PM","Apr 20, 2026 2:13:35 PM","1 hr"],[230,"33.994572","71.506182","Apr 20, 2026","Apr 20, 2026 2:43:40 PM","Apr 21, 2026 7:19:05 AM","16 hr 35 min"],[231,"33.997443","71.491605","Apr 21, 2026","Apr 21, 2026 7:29:54 AM","Apr 21, 2026 8:18:02 AM","48 min"],[232,"33.998313","71.495190","Apr 21, 2026","Apr 21, 2026 8:49:01 AM","Apr 21, 2026 10:48:37 AM","1 hr 60 min"],[233,"33.998755","71.493925","Apr 21, 2026","Apr 21, 2026 10:58:33 AM","Apr 21, 2026 11:01:44 AM","3 min"],[234,"33.994572","71.506058","Apr 21, 2026","Apr 21, 2026 11:18:32 AM","Apr 21, 2026 2:13:21 PM","2 hr 55 min"],[235,"33.996847","71.537278","Apr 21, 2026","Apr 21, 2026 3:09:18 PM","Apr 21, 2026 3:46:07 PM","37 min"],[236,"33.994587","71.506000","Apr 21, 2026","Apr 21, 2026 4:41:17 PM","Apr 22, 2026 7:16:36 AM","14 hr 35 min"],[237,"33.994525","71.506092","Apr 22, 2026","Apr 22, 2026 7:31:25 AM","Apr 22, 2026 8:23:02 AM","52 min"],[238,"33.998332","71.495165","Apr 22, 2026","Apr 22, 2026 8:58:21 AM","Apr 22, 2026 12:35:13 PM","3 hr 37 min"],[239,"33.994522","71.506167","Apr 22, 2026","Apr 22, 2026 1:04:22 PM","Apr 22, 2026 1:25:36 PM","21 min"],[240,"33.994930","71.506503","Apr 22, 2026","Apr 22, 2026 1:30:35 PM","Apr 22, 2026 1:39:22 PM","9 min"],[241,"33.994992","71.506223","Apr 22, 2026","Apr 22, 2026 1:41:50 PM","Apr 22, 2026 2:13:53 PM","32 min"],[242,"33.997538","71.493022","Apr 22, 2026","Apr 22, 2026 2:37:06 PM","Apr 22, 2026 2:38:06 PM","1 min"],[243,"33.994522","71.506123","Apr 22, 2026","Apr 22, 2026 2:45:24 PM","Apr 23, 2026 5:12:40 AM","14 hr 27 min"],[244,"33.994597","71.506070","Apr 27, 2026","Apr 27, 2026 7:41:09 AM","Apr 27, 2026 1:50:12 PM","6 hr 9 min"],[245,"33.994522","71.506097","Apr 27, 2026","Apr 27, 2026 1:57:47 PM","Apr 27, 2026 2:28:04 PM","30 min"],[246,"34.039802","71.527068","Apr 27, 2026","Apr 27, 2026 3:22:31 PM","Apr 27, 2026 3:44:23 PM","22 min"],[247,"34.020275","71.538452","Apr 27, 2026","Apr 27, 2026 3:51:54 PM","Apr 27, 2026 3:54:33 PM","3 min"],[248,"34.004263","71.504585","Apr 27, 2026","Apr 27, 2026 4:05:56 PM","Apr 27, 2026 4:19:28 PM","14 min"],[249,"33.994513","71.506052","Apr 27, 2026","Apr 27, 2026 4:26:57 PM","Apr 28, 2026 7:14:38 AM","14 hr 48 min"],[250,"33.994508","71.506292","Apr 28, 2026","Apr 28, 2026 7:29:25 AM","Apr 28, 2026 1:12:51 PM","5 hr 43 min"],[251,"33.994878","71.506272","Apr 28, 2026","Apr 28, 2026 1:39:46 PM","Apr 28, 2026 2:16:46 PM","37 min"],[252,"33.995233","71.503773","Apr 28, 2026","Apr 28, 2026 2:40:07 PM","Apr 29, 2026 7:18:49 AM","16 hr 39 min"],[253,"33.998260","71.495023","Apr 29, 2026","Apr 29, 2026 7:31:33 AM","Apr 29, 2026 8:49:28 AM","1 hr 18 min"],[254,"33.994650","71.506018","Apr 29, 2026","Apr 29, 2026 9:00:47 AM","Apr 29, 2026 12:02:42 PM","3 hr 2 min"],[255,"33.995782","71.494050","Apr 29, 2026","Apr 29, 2026 12:08:29 PM","Apr 29, 2026 12:09:37 PM","1 min"],[256,"33.995435","71.502638","Apr 29, 2026","Apr 29, 2026 12:14:15 PM","Apr 29, 2026 12:15:26 PM","1 min"],[257,"33.995357","71.503105","Apr 29, 2026","Apr 29, 2026 12:17:14 PM","Apr 29, 2026 1:57:36 PM","1 hr 40 min"],[258,"34.042665","71.525107","Apr 29, 2026","Apr 29, 2026 2:45:10 PM","Apr 29, 2026 3:39:44 PM","55 min"],[259,"33.994582","71.506068","Apr 29, 2026","Apr 29, 2026 4:08:11 PM","Apr 30, 2026 7:16:05 AM","15 hr 8 min"],[260,"33.998390","71.495162","Apr 30, 2026","Apr 30, 2026 7:34:51 AM","Apr 30, 2026 10:11:02 AM","2 hr 36 min"],[261,"33.998915","71.494327","Apr 30, 2026","Apr 30, 2026 10:19:27 AM","Apr 30, 2026 10:43:34 AM","24 min"],[262,"33.994473","71.506130","Apr 30, 2026","Apr 30, 2026 10:52:19 AM","Apr 30, 2026 11:32:20 AM","40 min"],[263,"33.998393","71.495180","Apr 30, 2026","Apr 30, 2026 11:41:11 AM","Apr 30, 2026 3:04:55 PM","3 hr 24 min"],[264,"34.004237","71.509330","Apr 30, 2026","Apr 30, 2026 3:21:19 PM","Apr 30, 2026 3:32:50 PM","12 min"],[265,"33.998438","71.495212","Apr 30, 2026","Apr 30, 2026 3:43:37 PM","Apr 30, 2026 3:48:46 PM","5 min"],[266,"33.994687","71.506030","Apr 30, 2026","Apr 30, 2026 4:01:13 PM","Apr 30, 2026 4:25:16 PM","24 min"],[267,"33.994655","71.507263","Apr 30, 2026","Apr 30, 2026 4:29:54 PM","Apr 30, 2026 4:50:30 PM","21 min"],[268,"33.998422","71.495185","Apr 30, 2026","Apr 30, 2026 5:03:59 PM","Apr 30, 2026 9:27:07 PM","4 hr 23 min"],[269,"33.994427","71.506160","Apr 30, 2026","Apr 30, 2026 9:33:35 PM","May 1, 2026 7:55:18 PM","22 hr 22 min"],[270,"33.994467","71.506067","May 01, 2026","May 1, 2026 8:22:34 PM","May 1, 2026 9:33:07 PM","1 hr 11 min"],[271,"33.998485","71.495175","May 01, 2026","May 1, 2026 9:46:07 PM","May 1, 2026 10:14:01 PM","28 min"],[272,"33.994648","71.506028","May 01, 2026","May 1, 2026 10:24:58 PM","May 1, 2026 11:05:44 PM","41 min"],[273,"33.998525","71.495163","May 01, 2026","May 1, 2026 11:29:09 PM","May 7, 2026 10:13:08 AM","130 hr 44 min"],[274,"33.998570","71.455377","May 07, 2026","May 7, 2026 10:26:24 AM","May 7, 2026 10:31:43 AM","5 min"],[275,"33.998775","71.453962","May 07, 2026","May 7, 2026 10:35:05 AM","May 7, 2026 10:36:14 AM","1 min"],[276,"34.007487","71.524875","May 07, 2026","May 7, 2026 10:50:40 AM","May 7, 2026 11:10:21 AM","20 min"],[277,"33.998327","71.495245","May 07, 2026","May 7, 2026 11:28:17 AM","May 7, 2026 12:57:49 PM","1 hr 30 min"],[278,"33.998367","71.495195","May 07, 2026","May 7, 2026 1:31:52 PM","May 7, 2026 2:21:40 PM","50 min"],[279,"33.998383","71.495232","May 07, 2026","May 7, 2026 2:46:10 PM","May 7, 2026 2:47:10 PM","1 min"],[280,"33.998447","71.495187","May 07, 2026","May 7, 2026 3:02:40 PM","May 7, 2026 3:06:17 PM","4 min"],[281,"33.994625","71.536877","May 07, 2026","May 7, 2026 3:53:45 PM","May 7, 2026 4:01:59 PM","8 min"],[282,"33.998328","71.495200","May 07, 2026","May 7, 2026 4:23:39 PM","May 8, 2026 1:33:31 PM","21 hr 10 min"],[283,"33.998400","71.495245","May 08, 2026","May 8, 2026 1:47:03 PM","May 8, 2026 1:52:55 PM","6 min"],[284,"33.998377","71.495218","May 08, 2026","May 8, 2026 2:28:01 PM","May 8, 2026 2:29:30 PM","1 min"],[285,"33.999805","71.496618","May 08, 2026","May 8, 2026 2:38:05 PM","May 8, 2026 2:42:56 PM","5 min"],[286,"33.998377","71.495203","May 08, 2026","May 8, 2026 2:49:08 PM","May 8, 2026 3:09:41 PM","21 min"],[287,"33.998307","71.495200","May 08, 2026","May 8, 2026 3:22:09 PM","May 9, 2026 11:50:27 AM","20 hr 28 min"],[288,"33.991553","71.456262","May 09, 2026","May 9, 2026 12:30:36 PM","May 9, 2026 1:25:38 PM","55 min"],[289,"33.998308","71.495552","May 09, 2026","May 9, 2026 1:44:34 PM","May 9, 2026 2:24:49 PM","40 min"],[290,"33.996133","71.463115","May 09, 2026","May 9, 2026 2:32:48 PM","May 9, 2026 4:48:30 PM","2 hr 16 min"],[291,"33.998358","71.495315","May 09, 2026","May 9, 2026 4:59:44 PM","May 11, 2026 7:18:46 AM","38 hr 19 min"],[292,"33.995677","71.489120","May 11, 2026","May 11, 2026 7:22:26 AM","May 11, 2026 7:23:57 AM","2 min"],[293,"33.998315","71.495167","May 11, 2026","May 11, 2026 7:43:20 AM","May 11, 2026 10:35:02 AM","2 hr 52 min"],[294,"34.001668","71.481320","May 11, 2026","May 11, 2026 10:47:22 AM","May 11, 2026 11:08:04 AM","21 min"],[295,"33.998312","71.495182","May 11, 2026","May 11, 2026 11:19:27 AM","May 11, 2026 3:17:33 PM","3 hr 58 min"],[296,"33.994565","71.536978","May 11, 2026","May 11, 2026 3:47:46 PM","May 11, 2026 4:32:38 PM","45 min"],[297,"34.005495","71.506807","May 11, 2026","May 11, 2026 4:44:47 PM","May 11, 2026 4:48:20 PM","4 min"],[298,"34.001797","71.498943","May 11, 2026","May 11, 2026 5:02:44 PM","May 11, 2026 5:12:18 PM","10 min"],[299,"34.003695","71.501873","May 11, 2026","May 11, 2026 5:17:38 PM","May 11, 2026 5:50:05 PM","32 min"],[300,"34.000830","71.498238","May 11, 2026","May 11, 2026 5:57:54 PM","May 11, 2026 6:01:08 PM","3 min"],[301,"33.997460","71.489193","May 11, 2026","May 11, 2026 6:05:47 PM","May 11, 2026 6:07:00 PM","1 min"],[302,"33.998318","71.495157","May 11, 2026","May 11, 2026 6:27:14 PM","May 12, 2026 7:53:13 AM","13 hr 26 min"],[303,"33.998317","71.495167","May 12, 2026","May 12, 2026 8:56:07 AM","May 12, 2026 9:55:34 AM","59 min"],[304,"34.004465","71.483433","May 12, 2026","May 12, 2026 10:08:47 AM","May 12, 2026 10:32:49 AM","24 min"],[305,"33.998283","71.495197","May 12, 2026","May 12, 2026 10:48:59 AM","May 12, 2026 11:31:22 AM","42 min"],[306,"33.980620","71.457290","May 12, 2026","May 12, 2026 12:03:39 PM","May 12, 2026 12:10:49 PM","7 min"],[307,"33.998530","71.495140","May 12, 2026","May 12, 2026 12:40:50 PM","May 12, 2026 12:45:48 PM","5 min"],[308,"33.997475","71.489825","May 12, 2026","May 12, 2026 12:51:03 PM","May 12, 2026 12:58:36 PM","8 min"],[309,"33.995732","71.489655","May 12, 2026","May 12, 2026 1:00:17 PM","May 12, 2026 1:44:43 PM","44 min"],[310,"33.545373","71.451712","May 12, 2026","May 12, 2026 3:56:06 PM","May 12, 2026 4:43:52 PM","48 min"],[311,"33.599712","71.461407","May 12, 2026","May 12, 2026 5:05:38 PM","May 12, 2026 5:07:24 PM","2 min"],[312,"33.998330","71.495168","May 12, 2026","May 12, 2026 6:46:45 PM","May 13, 2026 7:16:22 AM","12 hr 30 min"],[313,"33.998325","71.495192","May 13, 2026","May 13, 2026 7:28:28 AM","May 13, 2026 9:13:31 AM","1 hr 45 min"],[314,"33.997400","71.490102","May 13, 2026","May 13, 2026 9:18:39 AM","May 13, 2026 9:19:54 AM","1 min"],[315,"33.998287","71.495157","May 13, 2026","May 13, 2026 9:24:37 AM","May 14, 2026 7:17:54 AM","21 hr 53 min"],[316,"33.995637","71.488993","May 14, 2026","May 14, 2026 7:23:38 AM","May 14, 2026 7:28:25 AM","5 min"],[317,"33.998307","71.495175","May 14, 2026","May 14, 2026 7:36:01 AM","May 14, 2026 7:56:06 AM","20 min"],[318,"33.998308","71.495182","May 14, 2026","May 14, 2026 8:18:22 AM","May 14, 2026 10:10:59 AM","1 hr 53 min"],[319,"34.004443","71.483418","May 14, 2026","May 14, 2026 10:27:19 AM","May 14, 2026 10:29:14 AM","2 min"],[320,"33.998483","71.495153","May 14, 2026","May 14, 2026 10:54:44 AM","May 14, 2026 12:30:30 PM","1 hr 36 min"],[321,"33.995778","71.493980","May 14, 2026","May 14, 2026 12:35:21 PM","May 14, 2026 1:13:53 PM","39 min"],[322,"33.996170","71.488433","May 14, 2026","May 14, 2026 1:22:42 PM","May 14, 2026 2:00:46 PM","38 min"],[323,"33.998382","71.495220","May 14, 2026","May 14, 2026 2:29:45 PM","May 14, 2026 2:42:23 PM","13 min"],[324,"33.998385","71.495105","May 14, 2026","May 14, 2026 3:00:33 PM","May 15, 2026 8:13:41 AM","17 hr 13 min"],[325,"34.033280","71.480852","May 15, 2026","May 15, 2026 8:49:46 AM","May 15, 2026 9:15:46 AM","26 min"],[326,"33.998305","71.495197","May 15, 2026","May 15, 2026 9:52:41 AM","May 15, 2026 10:28:09 AM","35 min"],[327,"34.004487","71.483393","May 15, 2026","May 15, 2026 10:41:34 AM","May 15, 2026 10:45:35 AM","4 min"],[328,"33.998440","71.495213","May 15, 2026","May 15, 2026 11:08:58 AM","May 15, 2026 11:38:17 AM","29 min"],[329,"34.005483","71.506657","May 15, 2026","May 15, 2026 11:54:04 AM","May 15, 2026 12:11:40 PM","18 min"],[330,"33.998328","71.495235","May 15, 2026","May 15, 2026 12:26:30 PM","May 16, 2026 7:58:46 AM","19 hr 32 min"],[331,"33.998282","71.495075","May 16, 2026","May 16, 2026 8:38:54 AM","May 16, 2026 11:39:50 AM","3 hr 1 min"],[332,"33.980592","71.457235","May 16, 2026","May 16, 2026 12:01:53 PM","May 16, 2026 12:03:44 PM","2 min"],[333,"33.997428","71.490170","May 16, 2026","May 16, 2026 12:26:43 PM","May 16, 2026 12:34:18 PM","8 min"],[334,"33.998387","71.495115","May 16, 2026","May 16, 2026 12:49:14 PM","May 16, 2026 2:25:58 PM","1 hr 37 min"],[335,"33.996193","71.463118","May 16, 2026","May 16, 2026 2:35:11 PM","May 16, 2026 3:47:28 PM","1 hr 12 min"],[336,"33.998283","71.495193","May 16, 2026","May 16, 2026 4:00:48 PM","May 16, 2026 4:16:53 PM","16 min"],[337,"33.998325","71.495055","May 16, 2026","May 16, 2026 5:13:51 PM","May 16, 2026 6:26:54 PM","1 hr 13 min"],[338,"33.996342","71.463108","May 16, 2026","May 16, 2026 6:33:52 PM","May 16, 2026 8:11:03 PM","1 hr 37 min"],[339,"33.998292","71.495127","May 16, 2026","May 16, 2026 8:32:11 PM","May 18, 2026 8:06:03 AM","35 hr 34 min"],[340,"33.998308","71.495137","May 18, 2026","May 18, 2026 8:40:08 AM","May 18, 2026 10:21:03 AM","1 hr 41 min"],[341,"34.004457","71.483382","May 18, 2026","May 18, 2026 10:42:42 AM","May 18, 2026 10:45:24 AM","3 min"],[342,"33.998350","71.495188","May 18, 2026","May 18, 2026 11:07:29 AM","May 18, 2026 12:33:14 PM","1 hr 26 min"],[343,"33.996028","71.485748","May 18, 2026","May 18, 2026 12:42:27 PM","May 18, 2026 12:45:02 PM","3 min"],[344,"33.998298","71.495142","May 18, 2026","May 18, 2026 1:19:51 PM","May 18, 2026 2:55:06 PM","1 hr 35 min"],[345,"33.994690","71.505870","May 18, 2026","May 18, 2026 3:22:20 PM","May 18, 2026 3:40:33 PM","18 min"],[346,"33.998393","71.495205","May 18, 2026","May 18, 2026 3:47:24 PM","May 19, 2026 7:05:06 AM","15 hr 18 min"],[347,"33.998303","71.495110","May 19, 2026","May 19, 2026 7:41:38 AM","May 19, 2026 7:57:11 AM","16 min"],[348,"33.998318","71.495137","May 19, 2026","May 19, 2026 8:55:37 AM","May 19, 2026 10:10:10 AM","1 hr 15 min"],[349,"33.998300","71.495198","May 19, 2026","May 19, 2026 10:34:09 AM","May 19, 2026 11:28:29 AM","54 min"],[350,"33.980582","71.457290","May 19, 2026","May 19, 2026 11:53:52 AM","May 19, 2026 11:59:36 AM","6 min"],[351,"33.997407","71.490102","May 19, 2026","May 19, 2026 12:18:38 PM","May 19, 2026 12:22:17 PM","4 min"],[352,"33.998307","71.495200","May 19, 2026","May 19, 2026 12:30:24 PM","May 19, 2026 12:46:31 PM","16 min"],[353,"33.998342","71.495202","May 19, 2026","May 19, 2026 1:02:05 PM","May 20, 2026 7:08:27 AM","18 hr 6 min"],[354,"33.998320","71.495168","May 20, 2026","May 20, 2026 7:21:43 AM","May 20, 2026 8:04:34 AM","43 min"],[355,"33.997415","71.490335","May 20, 2026","May 20, 2026 8:26:54 AM","May 20, 2026 8:27:54 AM","1 min"],[356,"33.998475","71.495195","May 20, 2026","May 20, 2026 8:32:55 AM","May 20, 2026 9:34:56 AM","1 hr 2 min"],[357,"33.995408","71.536043","May 20, 2026","May 20, 2026 10:09:02 AM","May 20, 2026 10:11:39 AM","3 min"],[358,"33.998303","71.495188","May 20, 2026","May 20, 2026 10:44:16 AM","May 23, 2026 2:02:46 PM","75 hr 19 min"],[359,"33.998532","71.495192","May 23, 2026","May 23, 2026 2:12:54 PM","May 23, 2026 2:45:16 PM","32 min"],[360,"33.998452","71.430267","May 23, 2026","May 23, 2026 2:57:38 PM","May 23, 2026 3:42:33 PM","45 min"],[361,"34.034898","71.480152","May 23, 2026","May 23, 2026 4:08:39 PM","May 23, 2026 4:59:43 PM","51 min"],[362,"33.998325","71.495217","May 23, 2026","May 23, 2026 5:18:13 PM","May 24, 2026 1:24:19 PM","20 hr 6 min"],[363,"34.004623","71.483372","May 24, 2026","May 24, 2026 1:36:59 PM","May 24, 2026 2:07:37 PM","31 min"],[364,"34.004255","71.504357","May 24, 2026","May 24, 2026 2:27:11 PM","May 24, 2026 2:28:38 PM","1 min"],[365,"34.001827","71.499727","May 24, 2026","May 24, 2026 2:31:38 PM","May 24, 2026 2:33:20 PM","2 min"],[366,"33.974373","71.515042","May 24, 2026","May 24, 2026 3:02:41 PM","May 24, 2026 3:04:16 PM","2 min"],[367,"33.998292","71.495117","May 24, 2026","May 24, 2026 3:16:40 PM","May 25, 2026 4:26:38 PM","25 hr 10 min"],[368,"33.998748","71.493945","May 25, 2026","May 25, 2026 4:32:05 PM","May 25, 2026 4:40:16 PM","8 min"],[369,"34.007358","71.510203","May 25, 2026","May 25, 2026 5:00:34 PM","May 25, 2026 5:04:35 PM","4 min"],[370,"33.998472","71.495198","May 25, 2026","May 25, 2026 5:33:40 PM","Jun 2, 2026 11:33:36 AM","185 hr 60 min"],[371,"33.997785","71.483012","Jun 02, 2026","Jun 2, 2026 11:57:17 AM","Jun 2, 2026 3:05:42 PM","3 hr 8 min"],[372,"34.009307","71.516712","Jun 02, 2026","Jun 2, 2026 3:50:17 PM","Jun 2, 2026 3:58:57 PM","9 min"],[373,"34.007543","71.524893","Jun 02, 2026","Jun 2, 2026 4:09:00 PM","Jun 2, 2026 4:36:42 PM","28 min"],[374,"33.999975","71.496310","Jun 02, 2026","Jun 2, 2026 4:50:44 PM","Jun 4, 2026 3:41:31 PM","46 hr 51 min"],[375,"34.009252","71.516802","Jun 04, 2026","Jun 4, 2026 3:55:50 PM","Jun 4, 2026 5:17:35 PM","1 hr 22 min"],[376,"34.009272","71.516667","Jun 04, 2026","Jun 4, 2026 5:25:20 PM","Jun 4, 2026 5:31:33 PM","6 min"],[377,"33.993550","71.449752","Jun 04, 2026","Jun 4, 2026 5:49:56 PM","Jun 4, 2026 7:15:16 PM","1 hr 25 min"],[378,"33.993090","71.435173","Jun 04, 2026","Jun 4, 2026 7:23:41 PM","Jun 4, 2026 7:40:26 PM","17 min"],[379,"33.992882","71.435142","Jun 04, 2026","Jun 4, 2026 7:49:04 PM","Jun 4, 2026 7:50:04 PM","1 min"],[380,"33.993813","71.450363","Jun 04, 2026","Jun 4, 2026 7:57:53 PM","Jun 4, 2026 8:17:56 PM","20 min"],[381,"33.999978","71.496588","Jun 04, 2026","Jun 4, 2026 8:42:48 PM","Jun 9, 2026 9:25:21 AM","108 hr 43 min"],[382,"34.007478","71.524842","Jun 09, 2026","Jun 9, 2026 9:51:55 AM","Jun 9, 2026 10:12:52 AM","21 min"],[383,"34.011447","71.538230","Jun 09, 2026","Jun 9, 2026 10:19:17 AM","Jun 9, 2026 10:47:07 AM","28 min"],[384,"34.009262","71.516707","Jun 09, 2026","Jun 9, 2026 11:03:47 AM","Jun 9, 2026 11:09:37 AM","6 min"],[385,"33.998308","71.495572","Jun 09, 2026","Jun 9, 2026 11:33:31 AM","Jun 9, 2026 12:47:35 PM","1 hr 14 min"],[386,"34.013755","71.547740","Jun 09, 2026","Jun 9, 2026 1:14:13 PM","Jun 9, 2026 1:52:20 PM","38 min"],[387,"34.007707","71.522597","Jun 09, 2026","Jun 9, 2026 2:00:50 PM","Jun 9, 2026 2:54:24 PM","54 min"],[388,"33.998335","71.495667","Jun 09, 2026","Jun 9, 2026 3:04:24 PM","Jun 9, 2026 3:35:30 PM","31 min"],[389,"33.998182","71.606210","Jun 09, 2026","Jun 9, 2026 4:00:52 PM","Jun 9, 2026 4:19:24 PM","19 min"],[390,"33.999965","71.496368","Jun 09, 2026","Jun 9, 2026 4:49:40 PM","Jun 9, 2026 6:51:42 PM","2 hr 2 min"],[391,"34.011500","71.538350","Jun 09, 2026","Jun 9, 2026 7:11:32 PM","Jun 10, 2026 10:18:30 AM","15 hr 7 min"],[392,"34.009257","71.516750","Jun 10, 2026","Jun 10, 2026 10:28:37 AM","Jun 10, 2026 11:05:35 AM","37 min"],[393,"33.999935","71.496342","Jun 10, 2026","Jun 10, 2026 11:16:23 AM","Jun 10, 2026 5:37:49 PM","6 hr 21 min"],[394,"34.011470","71.538330","Jun 10, 2026","Jun 10, 2026 6:03:09 PM","Jun 11, 2026 10:40:16 AM","16 hr 37 min"],[395,"33.998327","71.495550","Jun 11, 2026","Jun 11, 2026 10:59:35 AM","Jun 11, 2026 11:58:26 AM","59 min"],[396,"34.007720","71.548217","Jun 11, 2026","Jun 11, 2026 12:36:11 PM","Jun 11, 2026 1:07:07 PM","31 min"],[397,"34.007740","71.522488","Jun 11, 2026","Jun 11, 2026 1:16:02 PM","Jun 11, 2026 2:00:39 PM","45 min"],[398,"33.998320","71.495557","Jun 11, 2026","Jun 11, 2026 2:10:41 PM","Jun 11, 2026 3:09:29 PM","59 min"],[399,"33.969103","71.487597","Jun 11, 2026","Jun 11, 2026 3:43:07 PM","Jun 11, 2026 3:55:36 PM","12 min"],[400,"33.998600","71.496692","Jun 11, 2026","Jun 11, 2026 4:23:09 PM","Jun 11, 2026 6:27:57 PM","2 hr 5 min"],[401,"33.999630","71.496450","Jun 11, 2026","Jun 11, 2026 6:37:19 PM","Jun 11, 2026 6:43:17 PM","6 min"],[402,"33.999915","71.496585","Jun 11, 2026","Jun 11, 2026 7:39:40 PM","Jun 13, 2026 9:36:58 AM","37 hr 57 min"],[403,"33.965110","71.498750","Jun 13, 2026","Jun 13, 2026 10:28:19 AM","Jun 13, 2026 10:57:32 AM","29 min"],[404,"33.965012","71.498742","Jun 13, 2026","Jun 13, 2026 11:00:01 AM","Jun 13, 2026 4:59:07 PM","5 hr 59 min"],[405,"33.964885","71.498937","Jun 13, 2026","Jun 13, 2026 5:20:36 PM","Jun 13, 2026 6:34:46 PM","1 hr 14 min"],[406,"34.008908","71.516795","Jun 13, 2026","Jun 13, 2026 7:15:41 PM","Jun 13, 2026 7:21:07 PM","5 min"],[407,"34.011497","71.538337","Jun 13, 2026","Jun 13, 2026 7:35:05 PM","Jun 14, 2026 2:07:07 PM","18 hr 32 min"],[408,"33.997927","71.497103","Jun 14, 2026","Jun 14, 2026 2:25:47 PM","Jun 14, 2026 2:57:43 PM","32 min"],[409,"34.011357","71.538288","Jun 14, 2026","Jun 14, 2026 3:11:16 PM","Jun 14, 2026 8:31:58 PM","5 hr 21 min"],[410,"34.011405","71.538323","Jun 14, 2026","Jun 14, 2026 8:35:27 PM","Jun 14, 2026 9:18:01 PM","43 min"],[411,"34.011192","71.538605","Jun 14, 2026","Jun 14, 2026 9:23:14 PM","Jun 15, 2026 10:00:24 AM","12 hr 37 min"],[412,"34.006142","71.531413","Jun 15, 2026","Jun 15, 2026 10:07:13 AM","Jun 15, 2026 10:29:43 AM","23 min"],[413,"33.998383","71.496858","Jun 15, 2026","Jun 15, 2026 11:12:40 AM","Jun 17, 2026 8:19:30 AM","45 hr 7 min"]],"route":[["📍  ROUTE COORDINATES",null,null],["Vehicle: 895277   |   Total Points: 4520",null,null],[null,null,null],["Point #","Latitude","Longitude"],[1,"33.971482","71.455597"],[2,"33.980125","71.443662"],[3,"33.997903","71.469620"],[4,"33.997927","71.497307"],[5,"33.997943","71.495057"],[6,"33.998070","71.471647"],[7,"33.986367","71.451345"],[8,"33.969347","71.490112"],[9,"33.965575","71.496508"],[10,"33.977370","71.447742"],[11,"33.998278","71.454360"],[12,"33.996878","71.458282"],[13,"33.992387","71.456710"],[14,"33.976443","71.450390"],[15,"33.971268","71.455558"],[16,"33.980853","71.445967"],[17,"33.993585","71.479813"],[18,"33.997463","71.490393"],[19,"33.995605","71.458538"],[20,"33.971200","71.455752"],[21,"33.969653","71.455562"],[22,"33.974773","71.454038"],[23,"33.999005","71.416345"],[24,"34.006092","71.379340"],[25,"34.007318","71.363500"],[26,"34.003855","71.353320"],[27,"34.005947","71.311785"],[28,"34.008953","71.296805"],[29,"34.010933","71.286817"],[30,"34.018930","71.280437"],[31,"34.026560","71.262680"],[32,"34.050673","71.249845"],[33,"34.059517","71.231518"],[34,"34.074577","71.205018"],[35,"34.083468","71.176237"],[36,"34.105032","71.152893"],[37,"34.107222","71.149747"],[38,"34.102272","71.134550"],[39,"34.105638","71.124785"],[40,"34.110908","71.114117"],[41,"34.106127","71.122965"],[42,"34.110603","71.115580"],[43,"34.122078","71.095890"],[44,"34.121990","71.095887"],[45,"34.110688","71.114410"],[46,"34.103812","71.158405"],[47,"34.102333","71.134447"],[48,"34.112073","71.120025"],[49,"34.114968","71.106758"],[50,"34.122068","71.095860"],[51,"34.113672","71.108168"],[52,"34.110463","71.117773"],[53,"34.100733","71.137502"],[54,"34.102637","71.156885"],[55,"34.085110","71.170962"],[56,"34.069338","71.220927"],[57,"34.058425","71.244990"],[58,"34.033340","71.260233"],[59,"34.023740","71.264643"],[60,"34.018768","71.282040"],[61,"34.008558","71.296190"],[62,"34.006013","71.316032"],[63,"34.003858","71.331935"],[64,"34.000058","71.388012"],[65,"33.997552","71.436100"],[66,"33.996962","71.454665"],[67,"33.986418","71.451370"],[68,"33.969652","71.455787"],[69,"33.973385","71.457058"],[70,"33.966828","71.434248"],[71,"33.971452","71.456438"],[72,"33.971478","71.455678"],[73,"33.971552","71.455615"],[74,"33.973507","71.458613"],[75,"33.980867","71.445970"],[76,"33.997567","71.497258"],[77,"33.998198","71.475392"],[78,"33.997400","71.467002"],[79,"33.997702","71.469188"],[80,"33.971232","71.455737"],[81,"33.974913","71.472527"],[82,"33.973887","71.456392"],[83,"33.981852","71.442548"],[84,"33.998438","71.477453"],[85,"33.986017","71.450940"],[86,"33.971507","71.455775"],[87,"33.980085","71.445355"],[88,"33.993685","71.457578"],[89,"33.998463","71.496747"],[90,"33.970300","71.488330"],[91,"33.973678","71.463823"],[92,"33.971533","71.455733"],[93,"33.979907","71.443907"],[94,"33.997095","71.453065"],[95,"34.006775","71.532313"],[96,"34.017150","71.553930"],[97,"34.014028","71.544843"],[98,"33.998430","71.496677"],[99,"33.998220","71.474660"],[100,"33.987590","71.452440"],[101,"33.973525","71.457845"],[102,"33.981030","71.442628"],[103,"33.997267","71.441090"],[104,"34.001738","71.383628"],[105,"34.004097","71.352028"],[106,"34.004700","71.310298"],[107,"34.006298","71.298978"],[108,"34.008355","71.298565"],[109,"34.010113","71.295213"],[110,"34.018842","71.281780"],[111,"34.022958","71.263668"],[112,"34.037800","71.254653"],[113,"34.055970","71.248863"],[114,"34.059568","71.231022"],[115,"34.078918","71.188772"],[116,"34.091473","71.160110"],[117,"34.103983","71.157992"],[118,"34.102343","71.139677"],[119,"34.105880","71.127315"],[120,"34.110512","71.117592"],[121,"34.121858","71.095712"],[122,"34.114208","71.113977"],[123,"34.105213","71.127900"],[124,"34.095413","71.140695"],[125,"34.103785","71.158368"],[126,"34.085822","71.169145"],[127,"34.076117","71.200620"],[128,"34.063690","71.224125"],[129,"34.049730","71.250217"],[130,"34.038122","71.254642"],[131,"34.026427","71.262647"],[132,"34.023372","71.274485"],[133,"34.006783","71.293568"],[134,"34.010143","71.295917"],[135,"34.006628","71.302815"],[136,"34.003237","71.318615"],[137,"34.004378","71.348965"],[138,"34.003015","71.357920"],[139,"33.999058","71.406493"],[140,"33.997400","71.440410"],[141,"33.998292","71.479785"],[142,"33.992263","71.457117"],[143,"33.988210","71.453093"],[144,"33.969893","71.456193"],[145,"33.997472","71.490188"],[146,"34.006382","71.507628"],[147,"33.999707","71.495497"],[148,"33.997645","71.468358"],[149,"33.971438","71.456183"],[150,"33.979878","71.445272"],[151,"33.998247","71.480692"],[152,"33.998118","71.497393"],[153,"33.998520","71.492880"],[154,"33.997615","71.491645"],[155,"33.992317","71.457087"],[156,"33.986607","71.451502"],[157,"33.973940","71.456285"],[158,"33.970145","71.488592"],[159,"33.973932","71.461662"],[160,"33.971565","71.455610"],[161,"33.995485","71.469740"],[162,"33.989737","71.487878"],[163,"33.994015","71.510753"],[164,"33.973050","71.544877"],[165,"33.990337","71.561443"],[166,"33.977585","71.553028"],[167,"33.962652","71.523638"],[168,"33.961932","71.503063"],[169,"33.974935","71.473925"],[170,"33.980740","71.456677"],[171,"33.971388","71.456025"],[172,"33.971503","71.455653"],[173,"33.997242","71.464963"],[174,"33.971620","71.455628"],[175,"33.998142","71.496930"],[176,"33.997538","71.467810"],[177,"33.974168","71.462800"],[178,"33.971572","71.455533"],[179,"33.995825","71.458598"],[180,"34.497572","71.725622"],[181,"34.495872","71.726502"],[182,"34.491818","71.707688"],[183,"34.495468","71.740515"],[184,"34.493587","71.776180"],[185,"34.485033","71.789000"],[186,"34.487648","71.790637"],[187,"34.495027","71.819788"],[188,"34.493015","71.842685"],[189,"34.488757","71.864312"],[190,"34.502947","71.879727"],[191,"34.503452","71.897333"],[192,"34.510883","71.895730"],[193,"34.505633","71.883617"],[194,"34.490607","71.869023"],[195,"34.493783","71.839797"],[196,"34.494692","71.818960"],[197,"34.489435","71.798262"],[198,"34.484950","71.787375"],[199,"34.488577","71.781913"],[200,"34.495262","71.775320"],[201,"34.495692","71.731045"],[202,"34.495812","71.726590"],[203,"34.495265","71.739758"],[204,"34.495557","71.726638"],[205,"34.495197","71.718290"],[206,"34.495655","71.721403"],[207,"34.494577","71.725752"],[208,"34.496062","71.760862"],[209,"34.489075","71.778570"],[210,"34.484975","71.787523"],[211,"34.493155","71.812167"],[212,"34.493390","71.841262"],[213,"34.497128","71.869948"],[214,"34.501998","71.898095"],[215,"34.477225","71.910242"],[216,"34.490568","71.900512"],[217,"34.507482","71.893425"],[218,"34.490065","71.866837"],[219,"34.492333","71.846030"],[220,"34.494672","71.838092"],[221,"34.488182","71.792305"],[222,"34.487880","71.783830"],[223,"34.496553","71.757750"],[224,"34.497603","71.725603"],[225,"34.495293","71.713090"],[226,"34.494432","71.718123"],[227,"34.496000","71.726438"],[228,"34.496580","71.751730"],[229,"34.491200","71.778627"],[230,"34.486032","71.787517"],[231,"34.491933","71.806798"],[232,"34.489440","71.852273"],[233,"34.496013","71.868432"],[234,"34.502377","71.898020"],[235,"34.482787","71.903532"],[236,"34.468848","71.910573"],[237,"34.435663","71.905942"],[238,"34.400197","71.910783"],[239,"34.389500","71.898162"],[240,"34.365978","71.899567"],[241,"34.336782","71.904443"],[242,"34.306838","71.901428"],[243,"34.286208","71.899598"],[244,"34.273702","71.898802"],[245,"34.248305","71.899082"],[246,"34.227300","71.866178"],[247,"34.219815","71.852385"],[248,"34.205022","71.823405"],[249,"34.194013","71.805542"],[250,"34.171013","71.778083"],[251,"34.151213","71.773785"],[252,"34.129582","71.780523"],[253,"34.119508","71.790433"],[254,"34.093208","71.741502"],[255,"34.057653","71.704302"],[256,"34.029983","71.663835"],[257,"34.014653","71.622388"],[258,"34.007568","71.617025"],[259,"33.978953","71.559492"],[260,"33.962640","71.523735"],[261,"33.969118","71.490167"],[262,"33.974832","71.474215"],[263,"33.971290","71.455648"],[264,"33.971372","71.455640"],[265,"33.998340","71.472658"],[266,"33.997330","71.465900"],[267,"33.973818","71.460137"],[268,"33.973205","71.456183"],[269,"33.998403","71.496758"],[270,"33.971517","71.455637"],[271,"33.972900","71.456197"],[272,"33.969770","71.456060"],[273,"33.973858","71.456992"],[274,"33.998080","71.454170"],[275,"33.996833","71.458342"],[276,"33.998780","71.418878"],[277,"34.004127","71.384782"],[278,"33.999282","71.407287"],[279,"33.996737","71.440477"],[280,"33.996828","71.458362"],[281,"33.998845","71.427315"],[282,"33.992802","71.457315"],[283,"33.974018","71.457758"],[284,"33.970202","71.488490"],[285,"33.974668","71.474643"],[286,"33.969703","71.456025"],[287,"33.961573","71.447563"],[288,"33.952500","71.428652"],[289,"33.964325","71.448708"],[290,"33.975185","71.471232"],[291,"33.974132","71.473560"],[292,"33.969718","71.456217"],[293,"33.969695","71.456053"],[294,"33.978573","71.521292"],[295,"33.999805","71.541602"],[296,"34.016413","71.570345"],[297,"34.015232","71.599327"],[298,"34.005542","71.534082"],[299,"33.997745","71.486323"],[300,"33.996492","71.461338"],[301,"34.000748","71.394825"],[302,"34.007950","71.365460"],[303,"34.005227","71.334415"],[304,"34.000993","71.328067"],[305,"34.006728","71.303918"],[306,"34.008652","71.294525"],[307,"34.019068","71.280250"],[308,"34.023133","71.263262"],[309,"34.053250","71.252002"],[310,"34.059525","71.233612"],[311,"34.073965","71.207567"],[312,"34.084713","71.172593"],[313,"34.103998","71.157997"],[314,"34.101430","71.136648"],[315,"34.105938","71.124022"],[316,"34.114948","71.104588"],[317,"34.113172","71.112735"],[318,"34.113797","71.113365"],[319,"34.100782","71.137332"],[320,"34.103910","71.158060"],[321,"34.098173","71.155000"],[322,"34.076395","71.199848"],[323,"34.067738","71.221435"],[324,"34.046562","71.254903"],[325,"34.036652","71.256213"],[326,"34.023688","71.270137"],[327,"34.017453","71.282493"],[328,"34.009753","71.296368"],[329,"34.001355","71.323067"],[330,"34.002930","71.358387"],[331,"34.001102","71.395590"],[332,"33.999368","71.410008"],[333,"33.997185","71.449218"],[334,"33.973802","71.457770"],[335,"33.971518","71.455638"],[336,"33.971507","71.455643"],[337,"33.983810","71.447545"],[338,"33.995838","71.494138"],[339,"33.999478","71.496597"],[340,"34.013473","71.541232"],[341,"34.008865","71.537430"],[342,"34.008548","71.515533"],[343,"33.988385","71.484403"],[344,"33.975437","71.470647"],[345,"33.968405","71.491657"],[346,"33.972413","71.481487"],[347,"33.973505","71.458285"],[348,"33.973873","71.476620"],[349,"33.972960","71.479942"],[350,"33.975173","71.471865"],[351,"33.969878","71.456157"],[352,"33.971150","71.455797"],[353,"33.974077","71.455742"],[354,"33.952492","71.429132"],[355,"33.956562","71.443173"],[356,"33.973795","71.458432"],[357,"33.978425","71.445930"],[358,"33.986863","71.451528"],[359,"33.998000","71.496885"],[360,"33.987928","71.452752"],[361,"33.971338","71.455753"],[362,"33.996892","71.463165"],[363,"33.999563","71.495803"],[364,"34.000007","71.496720"],[365,"33.998150","71.497435"],[366,"33.997488","71.491205"],[367,"33.984443","71.514160"],[368,"33.985840","71.530363"],[369,"33.999877","71.541915"],[370,"33.995685","71.535948"],[371,"33.973575","71.515523"],[372,"33.990002","71.511575"],[373,"33.996135","71.501122"],[374,"34.007690","71.510222"],[375,"34.007157","71.525185"],[376,"34.039723","71.527228"],[377,"34.039543","71.527218"],[378,"34.035577","71.529802"],[379,"34.005942","71.533705"],[380,"34.004297","71.504333"],[381,"33.999438","71.496507"],[382,"33.997870","71.493958"],[383,"34.001278","71.488578"],[384,"34.004720","71.504975"],[385,"33.988940","71.512223"],[386,"33.986713","71.512877"],[387,"33.995895","71.488905"],[388,"34.000575","71.497105"],[389,"34.007088","71.525528"],[390,"33.997547","71.538265"],[391,"34.006523","71.531217"],[392,"34.008843","71.513570"],[393,"33.998240","71.473900"],[394,"33.996535","71.460540"],[395,"33.998138","71.482443"],[396,"33.997565","71.497840"],[397,"33.998415","71.492913"],[398,"34.007782","71.523213"],[399,"34.039688","71.527132"],[400,"34.030907","71.532455"],[401,"34.006515","71.530248"],[402,"33.999388","71.496500"],[403,"34.005303","71.505618"],[404,"34.023565","71.536505"],[405,"34.030675","71.532578"],[406,"34.013773","71.541958"],[407,"34.006518","71.532665"],[408,"33.995747","71.490812"],[409,"34.001620","71.501342"],[410,"34.004945","71.505178"],[411,"33.994702","71.506010"],[412,"33.995843","71.492108"],[413,"33.994983","71.506053"],[414,"33.998873","71.493823"],[415,"34.007415","71.524588"],[416,"34.031652","71.531955"],[417,"34.023292","71.536655"],[418,"34.007233","71.509917"],[419,"33.994562","71.506072"],[420,"34.012018","71.540172"],[421,"34.025625","71.535378"],[422,"34.005950","71.534995"],[423,"33.997565","71.489510"],[424,"33.994505","71.505995"],[425,"33.994918","71.506038"],[426,"33.998923","71.496758"],[427,"33.998582","71.496768"],[428,"33.997563","71.495972"],[429,"33.997585","71.496438"],[430,"33.999570","71.495918"],[431,"33.997780","71.483662"],[432,"33.992123","71.457542"],[433,"34.001725","71.481808"],[434,"33.997475","71.492707"],[435,"33.994518","71.506177"],[436,"33.979947","71.522643"],[437,"34.008328","71.536998"],[438,"34.014480","71.547813"],[439,"34.007628","71.523070"],[440,"33.994463","71.506040"],[441,"33.971248","71.541883"],[442,"34.032692","71.608962"],[443,"34.007087","71.524933"],[444,"33.995845","71.497712"],[445,"34.006293","71.535143"],[446,"34.002108","71.484128"],[447,"34.004478","71.483388"],[448,"34.005403","71.506032"],[449,"34.020055","71.538633"],[450,"33.998460","71.493147"],[451,"33.994625","71.506050"],[452,"33.994682","71.505937"],[453,"33.997962","71.492308"],[454,"33.995600","71.501607"],[455,"33.997532","71.492727"],[456,"33.998118","71.454193"],[457,"33.998855","71.453983"],[458,"33.998077","71.470393"],[459,"34.007378","71.524878"],[460,"34.006747","71.532967"],[461,"34.010158","71.539107"],[462,"34.006628","71.527967"],[463,"34.003190","71.502320"],[464,"33.994475","71.506140"],[465,"33.995487","71.502037"],[466,"33.997623","71.490253"],[467,"34.014938","71.489215"],[468,"34.001265","71.498167"],[469,"33.998427","71.496875"],[470,"33.999515","71.497302"],[471,"34.006242","71.488900"],[472,"33.995367","71.503087"],[473,"33.998340","71.495182"],[474,"34.006300","71.482955"],[475,"33.995160","71.504667"],[476,"33.995298","71.503702"],[477,"33.995252","71.487992"],[478,"33.996890","71.500915"],[479,"34.005772","71.506515"],[480,"34.016868","71.540385"],[481,"34.023155","71.536813"],[482,"34.009578","71.538252"],[483,"33.995858","71.498533"],[484,"33.995463","71.502397"],[485,"34.003853","71.484020"],[486,"34.004198","71.503845"],[487,"33.999580","71.495998"],[488,"34.006315","71.535353"],[489,"34.039942","71.527105"],[490,"34.019730","71.538783"],[491,"34.006473","71.533200"],[492,"33.997652","71.488618"],[493,"34.007343","71.483002"],[494,"33.994603","71.506108"],[495,"33.995163","71.504728"],[496,"33.997863","71.494735"],[497,"33.995028","71.505312"],[498,"33.997880","71.500407"],[499,"33.996683","71.463075"],[500,"33.997598","71.500090"],[501,"33.997993","71.495217"],[502,"33.998320","71.495208"],[503,"33.988852","71.491137"],[504,"33.988250","71.476670"],[505,"33.998585","71.496753"],[506,"34.006515","71.482915"],[507,"34.007908","71.488973"],[508,"33.994533","71.506015"],[509,"33.997550","71.495375"],[510,"33.998453","71.492638"],[511,"34.038443","71.528072"],[512,"34.039748","71.527087"],[513,"34.041205","71.525758"],[514,"34.039767","71.527218"],[515,"34.034852","71.530200"],[516,"34.006628","71.528053"],[517,"33.995522","71.502043"],[518,"33.998950","71.496800"],[519,"33.997943","71.494193"],[520,"34.006735","71.528160"],[521,"34.011318","71.539740"],[522,"34.014098","71.541990"],[523,"33.988435","71.476790"],[524,"33.998202","71.476098"],[525,"34.003802","71.488688"],[526,"34.036378","71.503153"],[527,"34.040995","71.512700"],[528,"34.033353","71.515293"],[529,"34.025383","71.525142"],[530,"34.039843","71.527053"],[531,"34.041315","71.510200"],[532,"34.005672","71.488713"],[533,"34.003552","71.483685"],[534,"33.995565","71.501888"],[535,"33.997580","71.497232"],[536,"33.997443","71.491605"],[537,"33.998313","71.495190"],[538,"33.997990","71.492455"],[539,"34.001593","71.500370"],[540,"33.995753","71.490515"],[541,"33.994297","71.510377"],[542,"33.973237","71.515760"],[543,"33.997053","71.537613"],[544,"33.992418","71.530095"],[545,"33.973460","71.516478"],[546,"33.993090","71.482593"],[547,"33.995807","71.493430"],[548,"33.995900","71.497698"],[549,"33.995688","71.501047"],[550,"33.994313","71.490653"],[551,"33.995790","71.500942"],[552,"34.009692","71.486692"],[553,"34.012977","71.489227"],[554,"33.998307","71.495167"],[555,"33.997928","71.485428"],[556,"33.997660","71.491460"],[557,"33.995553","71.502407"],[558,"33.996422","71.500910"],[559,"33.995608","71.501752"],[560,"33.994597","71.506070"],[561,"33.998607","71.496720"],[562,"33.999435","71.495023"],[563,"34.008443","71.520177"],[564,"34.021427","71.537788"],[565,"34.039802","71.527068"],[566,"34.014050","71.542067"],[567,"34.008877","71.513105"],[568,"33.994513","71.506052"],[569,"34.004480","71.483432"],[570,"33.994588","71.505995"],[571,"33.995647","71.502715"],[572,"33.998260","71.495023"],[573,"33.995782","71.494050"],[574,"33.995365","71.503093"],[575,"34.005323","71.488770"],[576,"34.034493","71.514783"],[577,"34.021858","71.536403"],[578,"34.042480","71.525305"],[579,"34.024985","71.535732"],[580,"34.007400","71.536342"],[581,"33.997930","71.493358"],[582,"33.998562","71.495665"],[583,"33.997838","71.493990"],[584,"33.998607","71.496763"],[585,"33.997930","71.492322"],[586,"34.004237","71.509330"],[587,"33.998438","71.495212"],[588,"33.995103","71.504782"],[589,"33.994653","71.507262"],[590,"33.997553","71.497553"],[591,"33.997630","71.500950"],[592,"33.995215","71.503850"],[593,"33.998283","71.495445"],[594,"33.995383","71.502980"],[595,"33.998525","71.495163"],[596,"33.997908","71.495087"],[597,"33.997283","71.465875"],[598,"33.998570","71.455377"],[599,"33.996693","71.459137"],[600,"33.997895","71.486438"],[601,"34.006663","71.530393"],[602,"34.006483","71.533058"],[603,"33.998347","71.495382"],[604,"34.004388","71.483460"],[605,"33.998367","71.495195"],[606,"33.997520","71.492890"],[607,"33.998545","71.496795"],[608,"33.995898","71.493977"],[609,"33.998030","71.500292"],[610,"33.973798","71.516742"],[611,"33.994592","71.536877"],[612,"33.980450","71.514475"],[613,"33.998328","71.495200"],[614,"33.995785","71.492285"],[615,"33.997560","71.489278"],[616,"33.997903","71.493333"],[617,"33.998002","71.496892"],[618,"33.999805","71.496618"],[619,"33.997370","71.490510"],[620,"33.998010","71.496948"],[621,"33.981075","71.457603"],[622,"33.988527","71.460660"],[623,"33.984035","71.449883"],[624,"33.982630","71.446888"],[625,"33.998020","71.470263"],[626,"33.997993","71.481258"],[627,"33.998400","71.478722"],[628,"33.998348","71.495355"],[629,"33.996918","71.491975"],[630,"33.989612","71.489350"],[631,"33.997903","71.496465"],[632,"34.001623","71.481248"],[633,"33.998312","71.495182"],[634,"33.995895","71.497078"],[635,"33.983432","71.514252"],[636,"33.975373","71.518172"],[637,"33.994652","71.536840"],[638,"34.006520","71.531953"],[639,"33.998792","71.493502"],[640,"34.003755","71.501953"],[641,"33.997478","71.489302"],[642,"33.997898","71.492335"],[643,"33.998260","71.488563"],[644,"33.995310","71.463845"],[645,"33.987245","71.460342"],[646,"33.997515","71.491848"],[647,"33.998460","71.495562"],[648,"34.004422","71.483432"],[649,"33.997887","71.484890"],[650,"33.998363","71.495587"],[651,"33.989122","71.460870"],[652,"33.987158","71.460295"],[653,"33.996760","71.461608"],[654,"33.997450","71.490280"],[655,"33.997478","71.490590"],[656,"33.995732","71.489655"],[657,"33.989772","71.505538"],[658,"33.970423","71.540480"],[659,"33.945183","71.555845"],[660,"33.898122","71.558747"],[661,"33.845452","71.565295"],[662,"33.805258","71.554487"],[663,"33.776630","71.544917"],[664,"33.757548","71.530657"],[665,"33.732220","71.504997"],[666,"33.699878","71.495033"],[667,"33.682847","71.523450"],[668,"33.664787","71.537463"],[669,"33.647395","71.538255"],[670,"33.598547","71.527555"],[671,"33.603782","71.495282"],[672,"33.612382","71.460932"],[673,"33.583908","71.431237"],[674,"33.573270","71.446528"],[675,"33.544963","71.451715"],[676,"33.557557","71.453467"],[677,"33.595318","71.435275"],[678,"33.599035","71.454173"],[679,"33.600653","71.458838"],[680,"33.618793","71.462863"],[681,"33.637545","71.456757"],[682,"33.638395","71.463573"],[683,"33.640963","71.481588"],[684,"33.649062","71.524110"],[685,"33.653478","71.540132"],[686,"33.679177","71.538947"],[687,"33.687280","71.505140"],[688,"33.709828","71.494660"],[689,"33.733072","71.505610"],[690,"33.776513","71.544510"],[691,"33.809722","71.555505"],[692,"33.845133","71.565170"],[693,"33.894283","71.559318"],[694,"33.939130","71.555082"],[695,"33.959910","71.544945"],[696,"33.967043","71.534642"],[697,"33.975025","71.518197"],[698,"33.978673","71.511213"],[699,"33.998168","71.496878"],[700,"33.995798","71.494285"],[701,"33.997400","71.490102"],[702,"33.998308","71.495330"],[703,"33.998307","71.495175"],[704,"34.002230","71.484048"],[705,"33.998308","71.495182"],[706,"34.004443","71.483418"],[707,"34.002097","71.488658"],[708,"33.998375","71.495242"],[709,"33.997800","71.488953"],[710,"33.995725","71.488710"],[711,"33.997988","71.496890"],[712,"33.998385","71.495105"],[713,"33.997903","71.483378"],[714,"34.014813","71.484160"],[715,"34.030667","71.484203"],[716,"34.033285","71.480868"],[717,"34.032348","71.482640"],[718,"33.997470","71.494297"],[719,"33.998305","71.495197"],[720,"33.997093","71.491945"],[721,"34.004573","71.483370"],[722,"34.003888","71.488790"],[723,"34.004268","71.503978"],[724,"33.998567","71.493787"],[725,"33.995932","71.500785"],[726,"34.008572","71.517077"],[727,"34.005087","71.505880"],[728,"33.998328","71.495235"],[729,"33.997778","71.484290"],[730,"33.995467","71.465215"],[731,"33.975183","71.470153"],[732,"33.998282","71.495075"],[733,"33.997038","71.464438"],[734,"33.986835","71.460200"],[735,"33.987318","71.460353"],[736,"33.997898","71.485247"],[737,"33.998645","71.493555"],[738,"33.997772","71.484025"],[739,"33.998368","71.475700"],[740,"33.997860","71.494137"],[741,"34.007310","71.509645"],[742,"34.014543","71.551735"],[743,"34.015110","71.580933"],[744,"34.014278","71.548947"],[745,"34.013700","71.541875"],[746,"33.998237","71.492767"],[747,"33.993532","71.477317"],[748,"33.989883","71.487535"],[749,"33.998105","71.480655"],[750,"33.997738","71.468382"],[751,"33.997875","71.493923"],[752,"34.003532","71.483688"],[753,"33.997982","71.491760"],[754,"33.998573","71.496693"],[755,"33.999162","71.494623"],[756,"34.004872","71.483262"],[757,"33.996940","71.491982"],[758,"33.998350","71.495188"],[759,"33.996020","71.485737"],[760,"33.998298","71.495142"],[761,"33.994837","71.505925"],[762,"33.997927","71.493992"],[763,"33.999940","71.495498"],[764,"34.006822","71.530580"],[765,"34.011238","71.539712"],[766,"34.008205","71.520540"],[767,"33.998382","71.495267"],[768,"34.001982","71.485718"],[769,"33.994553","71.462477"],[770,"33.970740","71.486798"],[771,"33.981833","71.514307"],[772,"33.998318","71.495137"],[773,"33.999712","71.486227"],[774,"34.001337","71.488605"],[775,"33.998568","71.496393"],[776,"33.985013","71.459720"],[777,"33.997283","71.465858"],[778,"33.997437","71.465868"],[779,"33.997428","71.491142"],[780,"33.996150","71.500907"],[781,"33.998345","71.495307"],[782,"33.997790","71.491962"],[783,"34.007283","71.488778"],[784,"33.998498","71.495552"],[785,"33.998553","71.496740"],[786,"34.008213","71.521668"],[787,"34.017228","71.570892"],[788,"33.995408","71.536043"],[789,"34.006493","71.530628"],[790,"34.001978","71.486035"],[791,"33.997488","71.489520"],[792,"33.998472","71.496825"],[793,"33.997972","71.496865"],[794,"33.997345","71.439710"],[795,"33.997393","71.439458"],[796,"33.999670","71.488547"],[797,"34.030645","71.484235"],[798,"34.023512","71.481873"],[799,"34.001185","71.488625"],[800,"33.998002","71.485258"],[801,"34.006758","71.482948"],[802,"34.004255","71.504357"],[803,"33.995280","71.503917"],[804,"33.986382","71.513140"],[805,"33.994620","71.507937"],[806,"33.998515","71.495285"],[807,"33.998713","71.493918"],[808,"33.997697","71.486550"],[809,"33.998345","71.495200"],[810,"33.997775","71.483140"],[811,"33.998602","71.455408"],[812,"33.998408","71.478837"],[813,"34.008467","71.518067"],[814,"34.006673","71.533150"],[815,"33.998027","71.500028"],[816,"33.998298","71.495123"],[817,"33.998325","71.496045"],[818,"34.009252","71.516802"],[819,"34.008990","71.516640"],[820,"33.998200","71.477077"],[821,"33.993643","71.450095"],[822,"33.993813","71.450363"],[823,"33.997673","71.491502"],[824,"34.000010","71.496645"],[825,"33.997572","71.490293"],[826,"34.002507","71.500453"],[827,"34.008958","71.515938"],[828,"34.006935","71.526110"],[829,"34.011447","71.538230"],[830,"34.008270","71.520298"],[831,"34.008787","71.515310"],[832,"33.998762","71.496727"],[833,"34.001697","71.498963"],[834,"34.013755","71.547740"],[835,"34.013825","71.542308"],[836,"34.003673","71.503218"],[837,"33.985087","71.514107"],[838,"33.975202","71.518172"],[839,"33.979027","71.560808"],[840,"33.998182","71.606210"],[841,"33.991060","71.594743"],[842,"33.988698","71.588187"],[843,"33.981678","71.567317"],[844,"33.999965","71.496368"],[845,"34.006678","71.531953"],[846,"34.009257","71.516750"],[847,"33.999867","71.496317"],[848,"34.007697","71.510290"],[849,"34.011460","71.538273"],[850,"34.007945","71.511188"],[851,"33.997953","71.497113"],[852,"34.012985","71.547822"],[853,"34.009185","71.548170"],[854,"34.006000","71.533652"],[855,"34.008100","71.511285"],[856,"33.997953","71.496878"],[857,"33.991257","71.501355"],[858,"33.973603","71.515527"],[859,"33.969165","71.537482"],[860,"33.960033","71.510735"],[861,"33.970592","71.487050"],[862,"33.960938","71.513928"],[863,"33.965893","71.532748"],[864,"33.994298","71.510273"],[865,"33.997942","71.498390"],[866,"33.999745","71.496423"],[867,"33.996732","71.458227"],[868,"33.994158","71.438077"],[869,"33.974222","71.444332"],[870,"33.959177","71.443162"],[871,"33.969437","71.443333"],[872,"33.986937","71.451650"],[873,"33.997982","71.469850"],[874,"33.999897","71.496548"],[875,"33.999265","71.494155"],[876,"34.011850","71.539940"],[877,"34.006560","71.530927"],[878,"33.990862","71.502613"],[879,"33.974873","71.517768"],[880,"33.966888","71.534567"],[881,"33.965110","71.498750"],[882,"33.965043","71.498743"],[883,"33.963590","71.528425"],[884,"33.963032","71.501495"],[885,"33.964158","71.499288"],[886,"33.962975","71.525657"],[887,"33.978590","71.514575"],[888,"33.999695","71.497203"],[889,"34.008985","71.517113"],[890,"34.006575","71.534458"],[891,"34.011467","71.538357"],[892,"34.006543","71.531233"],[893,"33.991513","71.500470"],[894,"33.997927","71.497103"],[895,"34.007232","71.525527"],[896,"34.011357","71.538288"],[897,"34.011192","71.538605"],[898,"34.005463","71.534117"],[899,"34.003750","71.503217"],[900,"33.997975","71.499433"],[901,"33.983660","71.514208"],[902,"33.964185","71.499337"],[903,"33.971868","71.514912"],[904,"33.999745","71.496453"],[905,"33.998685","71.496502"]]}};
+
+/* ---------- fleet reference (authoritative driver/station map) ---------- */
+var DRIVER_MAP = {
+  "BAR-82":   {driver:"Sardar Yasir Hussain", station:"Rawalpindi HQ"},
+  "LEG-5163": {driver:"Shakeel Tariq",        station:"Rawalpindi HQ"},
+  "DHQ-656":  {driver:"Raheel",               station:"Rawalpindi HQ"},
+  "DGP-643":  {driver:"Riaz",                 station:"Rawalpindi HQ"},
+  "895289":   {driver:"Hazrat Ali",           station:"MEU's Peshawar"},
+  "895277":   {driver:"Qazi Qudrat",          station:"MEU's Peshawar"},
+  "895273":   {driver:"Asghar Rehman",        station:"MEU's Peshawar"},
+  "GPA-542":  {driver:"Ajmal",                station:"Karachi"},
+  "BD-6223":  {driver:"Aurangzaib",           station:"Karachi"},
+  "AZG-583":  {driver:"Basheer",              station:"Karachi"},
+  "KTI-4329": {driver:"Unassigned",           station:"Karachi"},
+  "KTI-4385": {driver:"Unassigned",           station:"Karachi"},
+  "CU-8356":  {driver:"Unassigned",           station:"Karachi"}
+};
+var KNOWN_DRIVERS = ["Sardar Yasir Hussain","Shakeel Tariq","Raheel","Riaz","Hazrat Ali","Qazi Qudrat","Asghar Rehman","Ajmal","Aurangzaib","Basheer","Unassigned"];
+var KNOWN_STATIONS = ["Rawalpindi HQ","MEU's Peshawar","Karachi","Unknown"];
+
+/* ---------- thresholds (tweak here if needed) ---------- */
+var CFG = {
+  MAX_CREDIBLE_SPEED: 140,   // km/h ceiling before we call it a GPS signal jump, not real driving
+  MIN_LEG_DIST_KM: 1,        // ignore micro-moves inside a parking lot
+  MIN_LEG_TIME_HR: 2/60,     // ignore legs shorter than 2 minutes (noisy)
+  SPEED_REVIEW_KMH: 70,      // segment avg speed above this gets a "review" flag
+  LONG_HALT_REVIEW_HR: 24,   // halts longer than this get a "review" flag
+  NIGHT_START_HR: 0,
+  NIGHT_END_HR: 5
+};
+
+/* ================= UTILITIES ================= */
+function parseDurationToMinutes(str){
+  if(!str) return 0;
+  var s = String(str);
+  var h = 0, m = 0;
+  var hm = s.match(/(\d+)\s*hr/);
+  var mm = s.match(/(\d+)\s*min/);
+  if(hm) h = parseInt(hm[1],10);
+  if(mm) m = parseInt(mm[1],10);
+  return h*60+m;
+}
+function numFrom(str){
+  if(str===null||str===undefined) return NaN;
+  var v = parseFloat(String(str).replace(/[^0-9.\-]/g,""));
+  return v;
+}
+function haversineKm(lat1,lon1,lat2,lon2){
+  var R=6371;
+  var dLat=(lat2-lat1)*Math.PI/180;
+  var dLon=(lon2-lon1)*Math.PI/180;
+  var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function pad2(n){ return n<10? "0"+n : ""+n; }
+function fmtNum(n, d){ if(n===undefined||n===null||isNaN(n)) return "—"; return n.toLocaleString("en-US",{maximumFractionDigits:(d===undefined?1:d), minimumFractionDigits:0}); }
+function fmtKm(n){ return fmtNum(n,1)+" km"; }
+function fmtKmh(n){ return fmtNum(n,1)+" km/h"; }
+function fmtHrsFromMin(min){
+  if(min===undefined||min===null||isNaN(min)) return "—";
+  var h = Math.floor(min/60), m = Math.round(min%60);
+  if(h<=0) return m+"m";
+  return h+"h "+m+"m";
+}
+function fmtDateShort(d){
+  if(!d || isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US",{month:"short",day:"2-digit",year:"numeric"});
+}
+function fmtDateTimeShort(d){
+  if(!d || isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US",{month:"short",day:"2-digit"})+" "+d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+}
+function escapeHtml(s){
+  if(s===null||s===undefined) return "";
+  return String(s).replace(/[&<>"']/g, function(c){ return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]; });
+}
+function isoWeekKey(d){
+  var dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  var dayNum = (dt.getUTCDay()+6)%7;
+  dt.setUTCDate(dt.getUTCDate()-dayNum+3);
+  var firstThursday = new Date(Date.UTC(dt.getUTCFullYear(),0,4));
+  var week = 1 + Math.round(((dt - firstThursday)/86400000 - 3 + ((firstThursday.getUTCDay()+6)%7))/7);
+  return dt.getUTCFullYear()+"-W"+pad2(week);
+}
+function dayKey(d){
+  return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
+}
+function downloadBlob(filename, content, mime){
+  var blob = new Blob([content], {type: mime||"text/plain"});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+}
+
+/* try/catch wrapped storage — falls back to in-memory if localStorage
+   is blocked (e.g. inside a sandboxed preview iframe) */
+var memStore = {};
+var Store = {
+  get:function(k){
+    try{ var v = localStorage.getItem(k); return v===null? null : JSON.parse(v); }
+    catch(e){ return memStore[k]===undefined? null : memStore[k]; }
+  },
+  set:function(k,v){
+    try{ localStorage.setItem(k, JSON.stringify(v)); }
+    catch(e){ memStore[k]=v; }
+  }
+};
+
+/* ================= CORE ENGINE ================= */
+/* takes raw = {summary:[[..]], idle:[[..]], route:[[..]]} and returns
+   a fully computed vehicle analytics object. Used both for the two
+   embedded starter vehicles AND for anything imported later — same
+   function, same rules, every time. */
+function buildVehicle(reg, raw, sourceLabel){
+  var summary = {};
+  (raw.summary||[]).forEach(function(row){
+    if(!row) return;
+    var k = row[0], v = row[1];
+    if(k && v!==null && v!==undefined && v!=="") summary[k]=v;
+  });
+
+  var idleRows = raw.idle||[];
+  var hIdx = -1;
+  for(var i=0;i<idleRows.length;i++){ if(idleRows[i] && idleRows[i][0]==="Stop #"){ hIdx=i; break; } }
+  var idle = [];
+  for(var i2=hIdx+1;i2<idleRows.length;i2++){
+    var r = idleRows[i2];
+    if(!r || r[0]===null || r[0]===undefined || r[0]==="") continue;
+    idle.push({
+      idx:r[0], lat:parseFloat(r[1]), lon:parseFloat(r[2]),
+      dateStr:r[3], arrivedStr:r[4], departedStr:r[5], durationStr:r[6],
+      arrived:new Date(r[4]), departed:new Date(r[5]), durationMin:parseDurationToMinutes(r[6])
+    });
+  }
+
+  var routeRows = raw.route||[];
+  var rIdx = -1;
+  for(var j=0;j<routeRows.length;j++){ if(routeRows[j] && routeRows[j][0]==="Point #"){ rIdx=j; break; } }
+  var route = [];
+  for(var j2=rIdx+1;j2<routeRows.length;j2++){
+    var rr = routeRows[j2];
+    if(!rr || rr[0]===null || rr[0]===undefined || rr[0]==="") continue;
+    var lat=parseFloat(rr[1]), lon=parseFloat(rr[2]);
+    if(!isNaN(lat) && !isNaN(lon)) route.push({idx:rr[0], lat:lat, lon:lon});
+  }
+
+  var totalDistanceKm = numFrom(summary["Total Distance (km)"]) || 0;
+  var totalDurationMin = parseDurationToMinutes(summary["Total Duration"]);
+  var tripStart = new Date(summary["Trip Start Time"]);
+  var tripEnd = new Date(summary["Trip End Time"]);
+  var totalGpsPoints = parseInt(numFrom(summary["Total GPS Points"])||0,10);
+  var movingPoints = parseInt(numFrom(summary["Moving Points"])||0,10);
+  var idleStopCount = parseInt(numFrom(summary["Idle / Stop Count"])||idle.length,10);
+
+  var totalIdleMin = 0;
+  idle.forEach(function(s){ totalIdleMin += s.durationMin; });
+  var movingMin = Math.max(totalDurationMin-totalIdleMin, 0);
+  var idleRatio = totalDurationMin>0 ? totalIdleMin/totalDurationMin : 0;
+  var avgSpeedOverall = totalDurationMin>0 ? totalDistanceKm/(totalDurationMin/60) : 0;
+  var avgSpeedMoving = movingMin>0 ? totalDistanceKm/(movingMin/60) : 0;
+
+  /* movement legs = gaps between consecutive recorded stops */
+  var legs = [];
+  for(var k2=0;k2<idle.length-1;k2++){
+    var a = idle[k2], b = idle[k2+1];
+    var distKm = haversineKm(a.lat,a.lon,b.lat,b.lon);
+    var timeHr = (b.arrived - a.departed)/3600000;
+    var speed = timeHr>0 ? distKm/timeHr : 0;
+    legs.push({
+      n:k2+1, fromIdx:a.idx, toIdx:b.idx, distKm:distKm, timeHr:timeHr, speed:speed,
+      start:a.departed, end:b.arrived, fromLoc:[a.lat,a.lon], toLoc:[b.lat,b.lon]
+    });
+  }
+
+  var anomalies = legs.filter(function(l){ return l.speed > CFG.MAX_CREDIBLE_SPEED; });
+  var credible = legs.filter(function(l){
+    return l.distKm>=CFG.MIN_LEG_DIST_KM && l.timeHr>=CFG.MIN_LEG_TIME_HR && l.speed<=CFG.MAX_CREDIBLE_SPEED;
+  });
+  var topLegs = credible.slice().sort(function(x,y){ return y.speed-x.speed; }).slice(0,8);
+  var estTopSpeed = topLegs.length? topLegs[0].speed : 0;
+  var longHalts = idle.slice().sort(function(x,y){ return y.durationMin-x.durationMin; }).slice(0,8);
+  var nightLegs = credible.filter(function(l){
+    var h = l.start.getHours();
+    return h>=CFG.NIGHT_START_HR && h<CFG.NIGHT_END_HR;
+  });
+
+  /* weekly distance trend (credible legs only — anomalies would distort it) */
+  var weekMap = {};
+  credible.forEach(function(l){
+    var wk = isoWeekKey(l.start);
+    weekMap[wk] = (weekMap[wk]||0) + l.distKm;
+  });
+  var weeks = Object.keys(weekMap).sort();
+  var weeklyDistance = weeks.map(function(w){ return {week:w, km:weekMap[w]}; });
+
+  /* halts by hour of day */
+  var hourHist = new Array(24).fill(0);
+  idle.forEach(function(s){ if(!isNaN(s.arrived.getTime())) hourHist[s.arrived.getHours()]++; });
+
+  /* utilisation */
+  var dayMap = {};
+  credible.forEach(function(l){ dayMap[dayKey(l.start)] = true; });
+  var activeDays = Object.keys(dayMap).length;
+  var totalSpanDays = Math.max(1, Math.round((tripEnd-tripStart)/86400000));
+  var utilization = activeDays/totalSpanDays;
+
+  /* frequent locations (rounded to ~111m grid) */
+  var locMap = {};
+  idle.forEach(function(s){
+    var key = s.lat.toFixed(3)+","+s.lon.toFixed(3);
+    if(!locMap[key]) locMap[key] = {lat:s.lat, lon:s.lon, count:0, totalMin:0};
+    locMap[key].count++; locMap[key].totalMin += s.durationMin;
+  });
+  var frequentLocations = Object.keys(locMap).map(function(k){ return locMap[k]; })
+    .sort(function(x,y){ return y.count-x.count; }).slice(0,5);
+
+  /* review points: merged, sorted by recency */
+  var review = [];
+  anomalies.forEach(function(l){
+    review.push({tag:"gap", date:l.start, desc:"GPS signal jump between two recorded stops",
+      sub:"Recorded distance/time imply a speed that isn't physically realistic — likely a tracker signal gap, not real driving.",
+      meta: fmtKmh(l.speed)+" (excluded from stats)"});
+  });
+  topLegs.filter(function(l){ return l.speed>=CFG.SPEED_REVIEW_KMH; }).forEach(function(l){
+    review.push({tag:"speed", date:l.start, desc:"Higher than usual average speed on a travel segment",
+      sub:fmtKm(l.distKm)+" covered in "+l.timeHr.toFixed(1)+" hr (segment average, not an instant reading)",
+      meta: fmtKmh(l.speed)});
+  });
+  nightLegs.forEach(function(l){
+    review.push({tag:"night", date:l.start, desc:"Vehicle movement between midnight and 5 AM",
+      sub:fmtKm(l.distKm)+" covered, average "+fmtKmh(l.speed),
+      meta: l.start.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})});
+  });
+  longHalts.filter(function(s){ return s.durationMin >= CFG.LONG_HALT_REVIEW_HR*60; }).slice(0,5).forEach(function(s){
+    review.push({tag:"halt", date:s.arrived, desc:"Extended halt at one location",
+      sub:"Lat "+s.lat.toFixed(4)+", Lon "+s.lon.toFixed(4),
+      meta: fmtHrsFromMin(s.durationMin)});
+  });
+  review.sort(function(x,y){ return y.date-x.date; });
+
+  return {
+    reg: reg, sourceLabel: sourceLabel||"", summary: summary, idle: idle, route: route, legs: legs,
+    totalDistanceKm: totalDistanceKm, totalDurationMin: totalDurationMin, tripStart: tripStart, tripEnd: tripEnd,
+    totalGpsPoints: totalGpsPoints, movingPoints: movingPoints, idleStopCount: idleStopCount,
+    totalIdleMin: totalIdleMin, movingMin: movingMin, idleRatio: idleRatio,
+    avgSpeedOverall: avgSpeedOverall, avgSpeedMoving: avgSpeedMoving,
+    anomalies: anomalies, credible: credible, topLegs: topLegs, estTopSpeed: estTopSpeed,
+    longHalts: longHalts, nightLegs: nightLegs, weeklyDistance: weeklyDistance, hourHist: hourHist,
+    activeDays: activeDays, totalSpanDays: totalSpanDays, utilization: utilization,
+    frequentLocations: frequentLocations, review: review,
+    imei: summary["IMEI"]||"—"
+  };
+}
+
+/* ================= APP STATE ================= */
+var App = {
+  vehicles: {},      // reg -> built vehicle object
+  order: [],         // tab order
+  active: null,
+  charts: {},        // chart.js instances
+  map: null,
+  mapLayer: null,
+  overrides: Store.get("nlc_trip_overrides") || {},   // reg -> {driver, station}
+  sortState: { stops:{col:"idx", dir:1}, legs:{col:"n", dir:1} },
+  searchState: { stops:"", legs:"" }
+};
+
+function driverInfo(reg){
+  var base = DRIVER_MAP[reg] || {driver:"Unassigned", station:"Unknown"};
+  var ov = App.overrides[reg];
+  return {
+    driver: (ov && ov.driver) || base.driver,
+    station: (ov && ov.station) || base.station
+  };
+}
+function setOverride(reg, field, value){
+  if(!App.overrides[reg]) App.overrides[reg] = {};
+  App.overrides[reg][field] = value;
+  Store.set("nlc_trip_overrides", App.overrides);
+}
+
+function toast(msg, isErr){
+  var box = document.getElementById("toast");
+  var d = document.createElement("div");
+  d.className = "toast-msg"+(isErr?" err":"");
+  d.textContent = msg;
+  box.appendChild(d);
+  setTimeout(function(){ d.remove(); }, 4200);
+}
+
+/* ================= LOAD VEHICLES ================= */
+function addVehicleFromRaw(reg, raw, sourceLabel, opts){
+  opts = opts||{};
+  try{
+    var v = buildVehicle(reg, raw, sourceLabel);
+    App.vehicles[reg] = v;
+    if(App.order.indexOf(reg)===-1) App.order.push(reg);
+    if(!opts.silent){
+      var stored = Store.get("nlc_trip_imported") || {};
+      stored[reg] = raw;
+      Store.set("nlc_trip_imported", stored);
+    }
+    return v;
+  }catch(e){
+    console.error(e);
+    toast("Could not read data for "+reg+": "+e.message, true);
+    return null;
+  }
+}
+
+function loadInitial(){
+  Object.keys(VEHICLE_RAW).forEach(function(reg){
+    addVehicleFromRaw(reg, VEHICLE_RAW[reg], "starter file", {silent:true});
+  });
+  var stored = Store.get("nlc_trip_imported") || {};
+  Object.keys(stored).forEach(function(reg){
+    if(!App.vehicles[reg]) addVehicleFromRaw(reg, stored[reg], "imported", {silent:true});
+  });
+  App.active = App.order[0] || null;
+}
+
+/* ================= FILE IMPORT (XLSX / CSV) ================= */
+function sheetNameMatch(name, kind){
+  var n = name.toLowerCase();
+  if(kind==="summary") return n.indexOf("trip summary")>=0 || n.indexOf("summary")>=0;
+  if(kind==="idle") return n.indexOf("idle")>=0 || n.indexOf("stop")>=0;
+  if(kind==="route") return n.indexOf("route")>=0;
+  return false;
+}
+
+function parseWorkbookFile(file){
+  return new Promise(function(resolve, reject){
+    var reader = new FileReader();
+    reader.onerror = function(){ reject(new Error("File could not be read")); };
+    reader.onload = function(e){
+      try{
+        if(/\.csv$/i.test(file.name)){
+          resolve(parseCsvTemplate(e.target.result));
+          return;
+        }
+        var data = new Uint8Array(e.target.result);
+        var wb = XLSX.read(data, {type:"array"});
+        var raw = {summary:[], idle:[], route:[]};
+        var registration = null;
+        wb.SheetNames.forEach(function(sn){
+          var rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:false, defval:null});
+          if(sheetNameMatch(sn,"summary")) raw.summary = rows;
+          else if(sheetNameMatch(sn,"route")) raw.route = rows;
+          else if(sheetNameMatch(sn,"idle")) raw.idle = rows;
+        });
+        raw.summary.forEach(function(r){ if(r && r[0]==="Registration No.") registration = r[1]; });
+        if(!registration) registration = file.name.replace(/\.[^.]+$/,"");
+        resolve({reg: String(registration).trim(), raw: raw});
+      }catch(err){ reject(err); }
+    };
+    if(/\.csv$/i.test(file.name)) reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
+  });
+}
+
+/* best-effort parser for a flat CSV export that mirrors the same
+   three-section template (summary / idle stops / route points) */
+function parseCsvTemplate(text){
+  var lines = text.split(/\r?\n/);
+  var raw = {summary:[], idle:[], route:[]};
+  var mode = null;
+  var registration = null;
+  for(var i=0;i<lines.length;i++){
+    var line = lines[i];
+    if(!line.trim()){ continue; }
+    var low = line.toLowerCase();
+    if(low.indexOf("vehicle trip report")>=0 || low.indexOf("vehicle information")>=0 || low.indexOf("trip overview")>=0){ mode="summary"; continue; }
+    if(low.indexOf("idle & stop")>=0 || low.indexOf("idle and stop")>=0){ mode="idle"; continue; }
+    if(low.indexOf("route coordinates")>=0){ mode="route"; continue; }
+    var cols = line.split(",").map(function(c){ return c.replace(/^"|"$/g,"").trim(); });
+    if(mode==="summary") raw.summary.push(cols);
+    else if(mode==="idle") raw.idle.push(cols);
+    else if(mode==="route") raw.route.push(cols);
+  }
+  raw.summary.forEach(function(r){ if(r && r[0]==="Registration No.") registration = r[1]; });
+  if(!registration) throw new Error("Could not find 'Registration No.' — please check the CSV matches the trip report template.");
+  // normalize numeric first columns for idle/route data rows
+  function fixIdx(rows, headerLabel){
+    var hi=-1;
+    for(var k=0;k<rows.length;k++){ if(rows[k] && rows[k][0]===headerLabel){ hi=k; break; } }
+    for(var k2=hi+1;k2<rows.length;k2++){ if(rows[k2] && rows[k2][0]!=="") rows[k2][0]=parseInt(rows[k2][0],10); }
+  }
+  fixIdx(raw.idle, "Stop #");
+  fixIdx(raw.route, "Point #");
+  return {reg: String(registration).trim(), raw: raw};
+}
+
+function handleFiles(fileList){
+  var files = Array.prototype.slice.call(fileList);
+  if(!files.length) return;
+  var promises = files.map(function(f){ return parseWorkbookFile(f).catch(function(err){ return {error:err, file:f}; }); });
+  Promise.all(promises).then(function(results){
+    var added = [];
+    results.forEach(function(res){
+      if(res.error){ toast("Skipped "+res.file.name+": "+res.error.message, true); return; }
+      var v = addVehicleFromRaw(res.reg, res.raw, "imported");
+      if(v) added.push(res.reg);
+    });
+    if(added.length){
+      toast("Added "+added.length+" vehicle file(s): "+added.join(", "));
+      App.active = added[0];
+      renderApp();
+    }
+  });
+}
+
+/* ================= RENDERING ================= */
+function renderApp(){
+  renderTabs();
+  var v = App.vehicles[App.active];
+  var main = document.getElementById("mainContent");
+  if(!v){
+    main.innerHTML = '<div class="empty-state"><h2>No vehicle data loaded</h2><p>Click "Add Vehicle File" above and choose a trip report (.xlsx) to get started.</p></div>';
+    return;
+  }
+  main.innerHTML = mainTemplate(v);
+  postRenderMain(v);
+}
+
+function renderTabs(){
+  var box = document.getElementById("vehicleTabs");
+  box.innerHTML = "";
+  App.order.forEach(function(reg){
+    var v = App.vehicles[reg];
+    var di = driverInfo(reg);
+    var flagged = v.anomalies.length>0 || v.review.filter(function(r){return r.tag==="speed"||r.tag==="night";}).length>0;
+    var tab = document.createElement("div");
+    tab.className = "vtab"+(reg===App.active?" active":"")+(flagged?" flagged":"");
+    tab.innerHTML = '<span class="dot"></span>'+escapeHtml(reg)+(di.driver&&di.driver!=="Unassigned"?' · '+escapeHtml(di.driver.split(" ")[0]):"");
+    tab.title = reg+" — "+di.driver+" ("+di.station+")";
+    tab.addEventListener("click", function(){ App.active = reg; renderApp(); });
+    box.appendChild(tab);
+  });
+}
+
+function infoDot(text){
+  return '<span class="info-dot" tabindex="0">i<span class="tip">'+escapeHtml(text)+'</span></span>';
+}
+
+function mainTemplate(v){
+  var di = driverInfo(v.reg);
+  var driverOptions = KNOWN_DRIVERS.map(function(d){ return '<option value="'+escapeHtml(d)+'"'+(d===di.driver?" selected":"")+'>'+escapeHtml(d)+'</option>'; }).join("");
+  if(KNOWN_DRIVERS.indexOf(di.driver)===-1) driverOptions = '<option value="'+escapeHtml(di.driver)+'" selected>'+escapeHtml(di.driver)+'</option>'+driverOptions;
+  var stationOptions = KNOWN_STATIONS.map(function(s){ return '<option value="'+escapeHtml(s)+'"'+(s===di.station?" selected":"")+'>'+escapeHtml(s)+'</option>'; }).join("");
+
+  return ''+
+  '<section class="hero-ticker">'+
+    '<div class="tick"><div class="tlabel">Vehicle</div><div class="tval mono">'+escapeHtml(v.reg)+'</div><div class="tsub">IMEI '+escapeHtml(v.imei)+'</div></div>'+
+    '<div class="tick"><div class="tlabel">Driver</div><div class="tval" style="font-size:16px">'+escapeHtml(di.driver)+'</div><div class="tsub">'+escapeHtml(di.station)+'</div></div>'+
+    '<div class="tick accent-green"><div class="tlabel">Distance Covered</div><div class="tval">'+fmtNum(v.totalDistanceKm,0)+'<span class="unit">km</span></div><div class="tsub">'+fmtDateShort(v.tripStart)+' → '+fmtDateShort(v.tripEnd)+'</div></div>'+
+    '<div class="tick accent-gold"><div class="tlabel">Avg Speed (Moving)</div><div class="tval">'+fmtNum(v.avgSpeedMoving,1)+'<span class="unit">km/h</span></div><div class="tsub">idle time excluded</div></div>'+
+    '<div class="tick"><div class="tlabel">Est. Top Speed</div><div class="tval">'+fmtNum(v.estTopSpeed,0)+'<span class="unit">km/h</span></div><div class="tsub">segment estimate</div></div>'+
+    '<div class="tick accent-amber"><div class="tlabel">Utilization</div><div class="tval">'+fmtNum(v.utilization*100,0)+'<span class="unit">%</span></div><div class="tsub">'+v.activeDays+' of '+v.totalSpanDays+' days active</div></div>'+
+  '</section>'+
+
+  '<main class="layout">'+
+    '<aside class="map-col">'+
+      '<div class="panel map-panel">'+
+        '<div class="panel-head"><h3>Route Map</h3><span class="ph-note">'+v.route.length+' GPS points plotted</span></div>'+
+        '<div id="map"></div>'+
+        '<div class="map-fallback" id="mapFallback">Map tiles need an internet connection. Showing route shape only — everything else in this report works fully offline.</div>'+
+        '<div class="map-legend">'+
+          '<span class="leg-item"><span class="leg-swatch" style="background:#3DA15E"></span>Start</span>'+
+          '<span class="leg-item"><span class="leg-swatch" style="background:#E3B655"></span>End</span>'+
+          '<span class="leg-item"><span class="leg-swatch" style="background:#C7595A;border-radius:50%"></span>Halt point (size = duration)</span>'+
+          '<span class="leg-item"><span class="leg-swatch" style="background:#9DAEA0"></span>Recorded path</span>'+
+        '</div>'+
+      '</div>'+
+      '<div class="panel vehicle-card">'+
+        '<div class="panel-head"><h3>Vehicle Info</h3></div>'+
+        '<div class="panel-body">'+
+          '<div class="row"><span class="k">Driver</span><select class="driver-select" id="driverSelect">'+driverOptions+'</select></div>'+
+          '<div class="row"><span class="k">Station</span><select class="driver-select" id="stationSelect">'+stationOptions+'</select></div>'+
+          '<div class="row"><span class="k">IMEI</span><span class="v">'+escapeHtml(v.imei)+'</span></div>'+
+          '<div class="row"><span class="k">Trip Start</span><span class="v">'+fmtDateTimeShort(v.tripStart)+'</span></div>'+
+          '<div class="row"><span class="k">Trip End</span><span class="v">'+fmtDateTimeShort(v.tripEnd)+'</span></div>'+
+          '<div class="row"><span class="k">Reporting Span</span><span class="v">'+v.totalSpanDays+' days</span></div>'+
+          '<div class="row"><span class="k">Source</span><span class="v">'+escapeHtml(v.sourceLabel)+'</span></div>'+
+        '</div>'+
+      '</div>'+
+      '<div class="panel">'+
+        '<div class="panel-head"><h3>Frequent Locations</h3><span class="ph-note">top 5 by visits</span></div>'+
+        '<div class="panel-body" style="padding:6px 0">'+
+          (v.frequentLocations.length? v.frequentLocations.map(function(l,i){
+            return '<div class="row" style="padding:8px 16px"><span class="k">#'+(i+1)+' · '+l.lat.toFixed(3)+', '+l.lon.toFixed(3)+'</span><span class="v">'+l.count+'x · '+fmtHrsFromMin(l.totalMin)+'</span></div>';
+          }).join("") : '<div class="review-empty">No repeated locations found</div>')+
+        '</div>'+
+      '</div>'+
+    '</aside>'+
+
+    '<section class="content-col">'+
+      '<div class="metric-grid">'+ metricCards(v) +'</div>'+
+
+      '<div class="panel chart-box">'+
+        '<div class="panel-head" style="padding:0 0 10px 0;border:none"><h3>Distance Covered Per Week</h3>'+infoDot("Sum of GPS-estimated travel distance for each week, using only credible (non-anomalous) movement segments.")+'</div>'+
+        '<canvas id="distanceTrendChart" height="80"></canvas>'+
+      '</div>'+
+
+      '<div class="chart-row">'+
+        '<div class="panel chart-box">'+
+          '<div class="panel-head" style="padding:0 0 10px 0;border:none"><h3>Idle vs Moving Time</h3>'+infoDot("Share of the total reporting period the vehicle spent parked/idle versus actually moving.")+'</div>'+
+          '<canvas id="idleMovingChart" height="190"></canvas>'+
+        '</div>'+
+        '<div class="panel chart-box">'+
+          '<div class="panel-head" style="padding:0 0 10px 0;border:none"><h3>Halts by Hour of Day</h3>'+infoDot("Counts when (hour of day) the vehicle most often comes to a stop — helps spot normal vs odd-hour patterns.")+'</div>'+
+          '<canvas id="hourHistChart" height="190"></canvas>'+
+        '</div>'+
+      '</div>'+
+
+      '<div class="chart-row">'+
+        '<div class="panel chart-box">'+
+          '<div class="panel-head" style="padding:0 0 10px 0;border:none"><h3>Longest Halts</h3>'+infoDot("The longest single stretches the vehicle stayed parked at one spot.")+'</div>'+
+          '<canvas id="longHaltsChart" height="190"></canvas>'+
+        '</div>'+
+        '<div class="panel chart-box">'+
+          '<div class="panel-head" style="padding:0 0 10px 0;border:none"><h3>Fastest Travel Segments</h3>'+infoDot("Highest average speed between two recorded stops. This is a segment average, not a single instant speed reading.")+'</div>'+
+          '<canvas id="fastLegsChart" height="190"></canvas>'+
+        '</div>'+
+      '</div>'+
+
+      '<div class="panel">'+
+        '<div class="panel-head"><h3>Review Points</h3><span class="ph-note">data patterns worth a second look — not automatic violations</span></div>'+
+        '<div class="review-list">'+ reviewListHtml(v) +'</div>'+
+      '</div>'+
+    '</section>'+
+  '</main>'+
+
+  '<div class="tables-wrap">'+
+    '<div class="panel">'+
+      '<div class="table-toolbar">'+
+        '<h3 style="margin:0;font-family:var(--font-display);font-size:13.5px">Halt / Stop Records ('+v.idle.length+')</h3>'+
+        '<input class="search-box" id="stopsSearch" placeholder="Search by date or coordinates…">'+
+        '<button class="btn btn-ghost" id="exportStopsBtn">Export CSV</button>'+
+      '</div>'+
+      '<div class="table-scroll"><table class="data-tbl" id="stopsTable"></table></div>'+
+      '<div class="table-pager" id="stopsPager"></div>'+
+    '</div>'+
+
+    '<div class="panel">'+
+      '<div class="table-toolbar">'+
+        '<h3 style="margin:0;font-family:var(--font-display);font-size:13.5px">Travel Segments ('+v.legs.length+')</h3>'+
+        '<input class="search-box" id="legsSearch" placeholder="Search by date…">'+
+        '<button class="btn btn-ghost" id="exportLegsBtn">Export CSV</button>'+
+      '</div>'+
+      '<div class="table-scroll"><table class="data-tbl" id="legsTable"></table></div>'+
+      '<div class="table-pager" id="legsPager"></div>'+
+    '</div>'+
+
+    '<div class="panel">'+
+      '<div class="panel-head"><h3>Fleet Comparison</h3><span class="ph-note">all vehicles currently loaded in this dashboard</span></div>'+
+      '<div class="table-scroll"><table class="data-tbl" id="fleetTable"></table></div>'+
+    '</div>'+
+  '</div>';
+}
+
+function metricCards(v){
+  var gapsWarn = v.anomalies.length>0;
+  var cards = [
+    {label:"Total Distance", val:fmtKm(v.totalDistanceKm), foot:"Reported by GPS tracker over "+v.totalSpanDays+" days", tip:"Total distance figure as recorded by the GPS tracking system for the full reporting period."},
+    {label:"Reporting Duration", val:fmtHrsFromMin(v.totalDurationMin), foot:fmtDateShort(v.tripStart)+" to "+fmtDateShort(v.tripEnd), tip:"Total time between the first and last GPS record in this report."},
+    {label:"Avg Speed (Moving)", val:fmtKmh(v.avgSpeedMoving), foot:"Distance ÷ time actually moving", tip:"Idle/parked time is excluded, so this reflects real driving speed, not overall trip pace."},
+    {label:"Est. Top Speed", val:fmtKmh(v.estTopSpeed), foot:v.topLegs.length+" travel segments checked", tip:"Highest average speed found on a single travel segment between two recorded stops. It's a GPS-based estimate, not a radar/instant speed reading."},
+    {label:"Idle Time", val:fmtHrsFromMin(v.totalIdleMin)+" ("+fmtNum(v.idleRatio*100,0)+"%)", foot:v.idleStopCount+" recorded halts", tip:"Total time the vehicle was parked/stationary, and what share of the full reporting period that is."},
+    {label:"Active Days", val:fmtNum(v.activeDays,0)+" / "+v.totalSpanDays, foot:fmtNum(v.utilization*100,0)+"% of days had movement", tip:"Number of days the vehicle actually moved at least once, out of the total days in this report."},
+    {label:"Halts ≥ 24h", val:fmtNum(v.longHalts.filter(function(s){return s.durationMin>=1440;}).length,0), foot:"out of "+v.idleStopCount+" total halts", tip:"Count of stops where the vehicle stayed parked at one place for 24 hours or more."},
+    {label:"GPS Data Quality", val: gapsWarn? v.anomalies.length+" signal gap"+(v.anomalies.length>1?"s":"") : "Clean", foot: gapsWarn? "excluded from speed stats" : v.totalGpsPoints.toLocaleString()+" GPS points received", tip:"A signal gap is when the tracker implies a physically impossible speed — usually a temporary loss of GPS signal, not real driving."}
+  ];
+  return cards.map(function(c,i){
+    return '<div class="mcard'+(i===7&&gapsWarn?" warn":"")+'"><div class="mlabel">'+c.label+infoDot(c.tip)+'</div><div class="mval">'+c.val+'</div><div class="mfoot">'+c.foot+'</div></div>';
+  }).join("");
+}
+
+var TAG_LABEL = {gap:"Signal Gap", speed:"High Speed", night:"Night Move", halt:"Long Halt"};
+function reviewListHtml(v){
+  if(!v.review.length) return '<div class="review-empty">No unusual patterns flagged for this vehicle in the current data.</div>';
+  return v.review.slice(0,12).map(function(r){
+    return '<div class="review-item">'+
+      '<span class="review-tag '+r.tag+'">'+TAG_LABEL[r.tag]+'</span>'+
+      '<span class="review-desc">'+escapeHtml(r.desc)+'<small>'+escapeHtml(r.sub)+'</small></span>'+
+      '<span class="review-meta">'+escapeHtml(r.meta)+'<br><span style="color:var(--text-faint)">'+fmtDateShort(r.date)+'</span></span>'+
+    '</div>';
+  }).join("");
+}
+
+/* ================= POST-RENDER: map, charts, tables, listeners ================= */
+function postRenderMain(v){
+  buildMap(v);
+  buildCharts(v);
+  buildStopsTable(v);
+  buildLegsTable(v);
+  buildFleetTable();
+  wireVehicleCardEvents(v);
+  wireTableEvents(v);
+}
+
+function wireVehicleCardEvents(v){
+  var ds = document.getElementById("driverSelect");
+  var ss = document.getElementById("stationSelect");
+  if(ds) ds.addEventListener("change", function(){ setOverride(v.reg,"driver",ds.value); renderTabs(); toast("Driver updated for "+v.reg); });
+  if(ss) ss.addEventListener("change", function(){ setOverride(v.reg,"station",ss.value); toast("Station updated for "+v.reg); });
+}
+
+function destroyCharts(){
+  Object.keys(App.charts).forEach(function(k){ if(App.charts[k]) App.charts[k].destroy(); });
+  App.charts = {};
+}
+
+var CHART_FONT = {family:"'Inter', sans-serif", size:11};
+var GRID_COLOR = "rgba(255,255,255,0.06)";
+var TEXT_DIM = "#9DAEA0";
+
+function buildCharts(v){
+  destroyCharts();
+  if(typeof Chart === "undefined") return;
+  Chart.defaults.font.family = "'Inter', sans-serif";
+  Chart.defaults.color = TEXT_DIM;
+
+  // distance trend
+  var dtCtx = document.getElementById("distanceTrendChart");
+  if(dtCtx){
+    App.charts.dt = new Chart(dtCtx, {
+      type:"bar",
+      data:{ labels: v.weeklyDistance.map(function(w){return w.week.replace(/^\d+-/,"");}),
+        datasets:[{label:"km", data:v.weeklyDistance.map(function(w){return w.km;}),
+          backgroundColor:"rgba(61,161,94,0.55)", borderColor:"#3DA15E", borderWidth:1, borderRadius:4, maxBarThickness:26}]},
+      options:{ responsive:true, plugins:{legend:{display:false}},
+        scales:{ x:{grid:{display:false}, ticks:{maxRotation:0, autoSkip:true}}, y:{grid:{color:GRID_COLOR}, title:{display:true,text:"km"}}}}
+    });
+  }
+  // idle vs moving doughnut
+  var imCtx = document.getElementById("idleMovingChart");
+  if(imCtx){
+    App.charts.im = new Chart(imCtx, {
+      type:"doughnut",
+      data:{ labels:["Idle / Parked","Moving"], datasets:[{data:[v.totalIdleMin, v.movingMin], backgroundColor:["#C9962A","#3DA15E"], borderWidth:0}]},
+      options:{ responsive:true, plugins:{legend:{position:"bottom", labels:{boxWidth:10}}}, cutout:"62%"}
+    });
+  }
+  // hour histogram
+  var hhCtx = document.getElementById("hourHistChart");
+  if(hhCtx){
+    App.charts.hh = new Chart(hhCtx, {
+      type:"bar",
+      data:{ labels: v.hourHist.map(function(_,i){return i+"h";}),
+        datasets:[{data:v.hourHist, backgroundColor:"rgba(201,150,42,0.55)", borderColor:"#C9962A", borderWidth:1, borderRadius:3}]},
+      options:{ responsive:true, plugins:{legend:{display:false}},
+        scales:{ x:{grid:{display:false}, ticks:{maxRotation:0, autoSkip:true, font:{size:9}}}, y:{grid:{color:GRID_COLOR}}}}
+    });
+  }
+  // long halts
+  var lhCtx = document.getElementById("longHaltsChart");
+  if(lhCtx){
+    var lh = v.longHalts.slice(0,6);
+    App.charts.lh = new Chart(lhCtx, {
+      type:"bar",
+      data:{ labels: lh.map(function(s){return fmtDateShort(s.arrived);}),
+        datasets:[{data: lh.map(function(s){return +(s.durationMin/60).toFixed(1);}), backgroundColor:"rgba(61,161,94,0.55)", borderColor:"#3DA15E", borderWidth:1, borderRadius:4}]},
+      options:{ indexAxis:"y", responsive:true, plugins:{legend:{display:false}},
+        scales:{ x:{grid:{color:GRID_COLOR}, title:{display:true,text:"hours"}}, y:{grid:{display:false}}}}
+    });
+  }
+  // fastest legs
+  var flCtx = document.getElementById("fastLegsChart");
+  if(flCtx){
+    var fl = v.topLegs.slice(0,6);
+    App.charts.fl = new Chart(flCtx, {
+      type:"bar",
+      data:{ labels: fl.map(function(l){return fmtDateShort(l.start);}),
+        datasets:[{data: fl.map(function(l){return +l.speed.toFixed(1);}), backgroundColor:"rgba(201,150,42,0.55)", borderColor:"#C9962A", borderWidth:1, borderRadius:4}]},
+      options:{ indexAxis:"y", responsive:true, plugins:{legend:{display:false}},
+        scales:{ x:{grid:{color:GRID_COLOR}, title:{display:true,text:"km/h"}}, y:{grid:{display:false}}}}
+    });
+  }
+}
+
+/* ---------- map ---------- */
+function buildMap(v){
+  var el = document.getElementById("map");
+  if(!el || typeof L === "undefined") return;
+  if(App.map){ App.map.remove(); App.map=null; }
+  var fallback = document.getElementById("mapFallback");
+  try{
+    App.map = L.map("map", {scrollWheelZoom:false, attributionControl:true});
+    var tiles = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:19, subdomains:"abcd"
+    });
+    var tileErrored = false;
+    tiles.on("tileerror", function(){
+      if(!tileErrored){ tileErrored = true; if(fallback) fallback.style.display = "block"; }
+    });
+    tiles.addTo(App.map);
+
+    var pts = v.route.map(function(p){ return [p.lat, p.lon]; });
+    if(pts.length){
+      var poly = L.polyline(pts, {color:"#9DAEA0", weight:2.5, opacity:0.8}).addTo(App.map);
+      App.map.fitBounds(poly.getBounds(), {padding:[24,24]});
+    } else {
+      App.map.setView([30.3753,69.3451], 5);
+    }
+
+    if(pts.length){
+      L.circleMarker(pts[0], {radius:7, color:"#3DA15E", fillColor:"#3DA15E", fillOpacity:0.9, weight:2}).addTo(App.map).bindPopup("Start: "+fmtDateTimeShort(v.tripStart));
+      L.circleMarker(pts[pts.length-1], {radius:7, color:"#E3B655", fillColor:"#E3B655", fillOpacity:0.9, weight:2}).addTo(App.map).bindPopup("End: "+fmtDateTimeShort(v.tripEnd));
+    }
+    var maxDur = Math.max.apply(null, v.idle.map(function(s){return s.durationMin;}).concat([1]));
+    v.idle.forEach(function(s){
+      var r = 3 + 9*Math.sqrt(s.durationMin/maxDur);
+      L.circleMarker([s.lat,s.lon], {radius:r, color:"#C7595A", fillColor:"#C7595A", fillOpacity:0.35, weight:1}).addTo(App.map)
+        .bindPopup("Stop #"+s.idx+"<br>"+fmtDateTimeShort(s.arrived)+" → "+fmtDateTimeShort(s.departed)+"<br>Duration: "+s.durationStr);
+    });
+  }catch(e){
+    console.error(e);
+    if(fallback) fallback.style.display = "block";
+  }
+}
+
+/* ---------- tables ---------- */
+function sortRows(rows, col, dir, getter){
+  return rows.slice().sort(function(a,b){
+    var av = getter(a,col), bv = getter(b,col);
+    if(av<bv) return -1*dir; if(av>bv) return 1*dir; return 0;
+  });
+}
+
+function buildStopsTable(v){
+  var table = document.getElementById("stopsTable");
+  var cols = [
+    {k:"idx", label:"#"}, {k:"dateStr", label:"Date"}, {k:"arrivedStr", label:"Arrived"},
+    {k:"departedStr", label:"Departed"}, {k:"durationMin", label:"Duration"}, {k:"lat", label:"Lat"}, {k:"lon", label:"Lon"}
+  ];
+  function getter(row,col){ return row[col]; }
+  function render(){
+    var q = (App.searchState.stops||"").toLowerCase();
+    var rows = v.idle.filter(function(s){
+      if(!q) return true;
+      return (s.dateStr+" "+s.lat+" "+s.lon).toLowerCase().indexOf(q)>=0;
+    });
+    var st = App.sortState.stops;
+    rows = sortRows(rows, st.col, st.dir, getter);
+    var thead = "<thead><tr>"+cols.map(function(c){
+      return '<th data-col="'+c.k+'">'+c.label+(st.col===c.k?(st.dir===1?" ▲":" ▼"):"")+'</th>';
+    }).join("")+"</tr></thead>";
+    var tbody = "<tbody>"+rows.map(function(s){
+      var longPill = s.durationMin>=1440 ? '<span class="pill long">'+fmtHrsFromMin(s.durationMin)+'</span>' : fmtHrsFromMin(s.durationMin);
+      return "<tr><td>"+s.idx+"</td><td>"+escapeHtml(s.dateStr)+"</td><td>"+escapeHtml(s.arrivedStr)+"</td><td>"+escapeHtml(s.departedStr)+"</td><td>"+longPill+"</td><td>"+s.lat.toFixed(5)+"</td><td>"+s.lon.toFixed(5)+"</td></tr>";
+    }).join("")+"</tbody>";
+    table.innerHTML = thead+tbody;
+    document.getElementById("stopsPager").textContent = "Showing "+rows.length+" of "+v.idle.length+" halts";
+    table.querySelectorAll("th").forEach(function(th){
+      th.addEventListener("click", function(){
+        var col = th.getAttribute("data-col");
+        if(st.col===col) st.dir*=-1; else { st.col=col; st.dir=1; }
+        render();
+      });
+    });
+  }
+  render();
+  var search = document.getElementById("stopsSearch");
+  search.addEventListener("input", function(){ App.searchState.stops = search.value; render(); });
+  document.getElementById("exportStopsBtn").addEventListener("click", function(){
+    var csv = "Stop #,Date,Arrived,Departed,Duration,Latitude,Longitude\n" + v.idle.map(function(s){
+      return [s.idx,s.dateStr,s.arrivedStr,s.departedStr,s.durationStr,s.lat,s.lon].join(",");
+    }).join("\n");
+    downloadBlob(v.reg+"_halts.csv", csv, "text/csv");
+  });
+}
+
+function buildLegsTable(v){
+  var table = document.getElementById("legsTable");
+  var cols = [
+    {k:"n", label:"#"}, {k:"start", label:"Departed"}, {k:"end", label:"Arrived"},
+    {k:"distKm", label:"Distance"}, {k:"timeHr", label:"Duration"}, {k:"speed", label:"Avg Speed"}
+  ];
+  function getter(row,col){
+    if(col==="start"||col==="end") return row[col].getTime();
+    return row[col];
+  }
+  function render(){
+    var q = (App.searchState.legs||"").toLowerCase();
+    var rows = v.legs.filter(function(l){
+      if(!q) return true;
+      return fmtDateShort(l.start).toLowerCase().indexOf(q)>=0;
+    });
+    var st = App.sortState.legs;
+    rows = sortRows(rows, st.col, st.dir, getter);
+    var thead = "<thead><tr>"+cols.map(function(c){
+      return '<th data-col="'+c.k+'">'+c.label+(st.col===c.k?(st.dir===1?" ▲":" ▼"):"")+'</th>';
+    }).join("")+"</tr></thead>";
+    var tbody = "<tbody>"+rows.map(function(l){
+      var isAnomaly = l.speed>CFG.MAX_CREDIBLE_SPEED;
+      var speedCell = isAnomaly ? '<span class="pill" style="background:rgba(199,89,90,0.18);color:#C7595A">signal gap</span>' :
+        (l.speed>=CFG.SPEED_REVIEW_KMH ? '<span class="pill fast">'+fmtKmh(l.speed)+'</span>' : fmtKmh(l.speed));
+      return "<tr><td>"+l.n+"</td><td>"+fmtDateTimeShort(l.start)+"</td><td>"+fmtDateTimeShort(l.end)+"</td><td>"+fmtKm(l.distKm)+"</td><td>"+l.timeHr.toFixed(2)+" hr</td><td>"+speedCell+"</td></tr>";
+    }).join("")+"</tbody>";
+    table.innerHTML = thead+tbody;
+    document.getElementById("legsPager").textContent = "Showing "+rows.length+" of "+v.legs.length+" segments";
+    table.querySelectorAll("th").forEach(function(th){
+      th.addEventListener("click", function(){
+        var col = th.getAttribute("data-col");
+        if(st.col===col) st.dir*=-1; else { st.col=col; st.dir=1; }
+        render();
+      });
+    });
+  }
+  render();
+  var search = document.getElementById("legsSearch");
+  search.addEventListener("input", function(){ App.searchState.legs = search.value; render(); });
+  document.getElementById("exportLegsBtn").addEventListener("click", function(){
+    var csv = "Segment #,Departed,Arrived,Distance(km),Duration(hr),AvgSpeed(km/h)\n" + v.legs.map(function(l){
+      return [l.n, l.start.toISOString(), l.end.toISOString(), l.distKm.toFixed(2), l.timeHr.toFixed(2), l.speed.toFixed(1)].join(",");
+    }).join("\n");
+    downloadBlob(v.reg+"_segments.csv", csv, "text/csv");
+  });
+}
+
+function buildFleetTable(){
+  var table = document.getElementById("fleetTable");
+  if(!table) return;
+  var thead = "<thead><tr><th>Vehicle</th><th>Driver</th><th>Station</th><th>Distance</th><th>Avg Speed</th><th>Idle %</th><th>Utilization</th><th>Halts</th><th>Data Quality</th></tr></thead>";
+  var rows = App.order.map(function(reg){
+    var v = App.vehicles[reg];
+    var di = driverInfo(reg);
+    var quality = v.anomalies.length>0 ? '<span class="pill" style="background:rgba(217,146,63,0.16);color:#F0AE5C">'+v.anomalies.length+' gap'+(v.anomalies.length>1?'s':'')+'</span>' : '<span class="pill long">clean</span>';
+    var active = reg===App.active ? ' style="background:var(--surface-2)"' : '';
+    return "<tr"+active+"><td>"+escapeHtml(reg)+"</td><td>"+escapeHtml(di.driver)+"</td><td>"+escapeHtml(di.station)+"</td><td>"+fmtKm(v.totalDistanceKm)+"</td><td>"+fmtKmh(v.avgSpeedMoving)+"</td><td>"+fmtNum(v.idleRatio*100,0)+"%</td><td>"+fmtNum(v.utilization*100,0)+"%</td><td>"+v.idleStopCount+"</td><td>"+quality+"</td></tr>";
+  }).join("");
+  table.innerHTML = thead+"<tbody>"+rows+"</tbody>";
+}
+
+function wireTableEvents(v){ /* search/sort handlers wired inside build*Table */ }
+
+/* ================= INIT ================= */
+function init(){
+  loadInitial();
+  renderApp();
+
+  document.getElementById("btnImport").addEventListener("click", function(){
+    document.getElementById("fileInput").click();
+  });
+  document.getElementById("fileInput").addEventListener("change", function(e){
+    handleFiles(e.target.files);
+    e.target.value = "";
+  });
+  document.getElementById("btnPrint").addEventListener("click", function(){
+    toast("Tip: in the print dialog, enable 'Background graphics' to keep colors and the map.");
+    setTimeout(function(){ window.print(); }, 400);
+  });
+}
+
+if(document.readyState==="loading") document.addEventListener("DOMContentLoaded", init);
+else init();
+
+})();
+
+</script>
+</body>
+</html>
